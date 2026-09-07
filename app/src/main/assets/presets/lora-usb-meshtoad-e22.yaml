@@ -1,0 +1,34 @@
+# Meshdroid preset: meshtoad-e22
+# Source: meshtastic/firmware bin/config.d/lora-usb-meshtoad-e22.yaml
+# This config works with all revisions of the Meshtoad USB radio.
+
+
+Lora:
+  # Region: US   <- set from the Node tab; applied only while the node has no region
+  Module: sx1262
+  CS: 0
+  IRQ: 6
+  Reset: 2
+  Busy: 4
+  RXen: 1
+  DIO2_AS_RF_SWITCH: true
+  DIO3_TCXO_VOLTAGE: true
+  spidev: ch341
+  USB_PID: 0x5512
+  USB_VID: 0x1A86
+  # Optional: Reduce power to 10 dBm to
+  # avoid over-drawing the USB port
+  # Phone OTG ports are usually ~500 mA; start at 10 dBm, raise once proven.
+  SX126X_MAX_POWER: 10
+  # Optional: Set the serial number for multi-radio support
+  # USB_Serialnum: 13374201
+
+General:
+  MaxNodes: 200
+  MaxMessageQueue: 100
+  # No BlueZ on Android: MAC/NodeID derive from the dongle's USB serial.
+  # If your dongle has no unique serial (Pinedio v1), uncomment and set one:
+  # MACAddress: 02:00:00:12:34:56
+
+Logging:
+  LogLevel: info
