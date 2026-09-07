@@ -156,7 +156,7 @@ build. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains how the pieces
 fit and what each firmware patch does. [docs/RELEASING.md](docs/RELEASING.md)
 covers signing, versioning and publishing.
 
-## Licence
+## License
 
 Copyright 2026 Multitool Studio. Meshdroid is released under the GNU General
 Public License, version 3 (see [LICENSE](LICENSE)).
@@ -165,3 +165,12 @@ The daemon shipped in each release is built from
 [meshtastic/firmware](https://github.com/meshtastic/firmware) (GPL-3.0) with
 the patches in `firmware/`. Those patches and build scripts are the
 corresponding source for the binary.
+
+
+## AI Disclosure
+
+This codebase was developed with AI-assisted tooling. Prior to this project, I had no experience with the Android SDK or the meshtasticd source code. AI was used during development for research, boilerplate, and implementation support.
+
+All architectural decisions, code review, and final implementation are my own. Every commit was audited and verified by me before merge. That said, I am a human.
+
+Licensed under GPLv3. No warranty is provided; see LICENSE for full terms.
