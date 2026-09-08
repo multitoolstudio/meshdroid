@@ -1,0 +1,19 @@
+# Meshdroid preset: Pinedio USB SX1262
+# Source: meshtastic/firmware bin/config.d/lora-pinedio-usb-sx1262.yaml
+
+Lora:
+  # Region: US   <- set from the Node tab; applied only while the node has no region
+  Module: sx1262
+  CS: 0 
+  IRQ: 10
+  spidev: ch341
+
+General:
+  MaxNodes: 200
+  MaxMessageQueue: 100
+  # No BlueZ on Android: MAC/NodeID derive from the dongle's USB serial.
+  # If your dongle has no unique serial (Pinedio v1), uncomment and set one:
+  # MACAddress: 02:00:00:12:34:56
+
+Logging:
+  LogLevel: info

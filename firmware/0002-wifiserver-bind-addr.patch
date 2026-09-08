@@ -1,0 +1,43 @@
+diff --git a/src/WiFiServer.cpp b/src/WiFiServer.cpp
+index f65870c..8f6d4c1 100644
+--- a/src/WiFiServer.cpp
++++ b/src/WiFiServer.cpp
+@@ -40,11 +40,13 @@ extern "C" {
+ #include <assert.h>
+ #include <stdlib.h>
+ #ifndef _WIN32
++#include <arpa/inet.h> // inet_pton() for MESHTASTICD_BIND_ADDR
+ #include <fcntl.h>
+ #include <netdb.h>
+ #include <netinet/in.h>
+ #include <unistd.h>
+ #endif
++#include <stdio.h>
+ 
+ WiFiServer::WiFiServer(uint16_t port) { _port = port; }
+ 
+@@ -83,6 +85,24 @@ void WiFiServer::begin() {
+   serv_addr.sin_addr.s_addr = INADDR_ANY;
+   serv_addr.sin_port = htons(_port);
+ 
++  // Optional bind-address override, e.g. MESHTASTICD_BIND_ADDR=127.0.0.1 to keep
++  // the API off the LAN. Set by the Android host app (Meshdroid); harmless elsewhere.
++#ifndef _WIN32
++  if (const char *bindAddr = getenv("MESHTASTICD_BIND_ADDR")) {
++    if (bindAddr[0] != '\0' && inet_pton(AF_INET, bindAddr, &serv_addr.sin_addr) != 1) {
++      fprintf(stderr, "Ignoring invalid MESHTASTICD_BIND_ADDR '%s'\n", bindAddr);
++      serv_addr.sin_addr.s_addr = INADDR_ANY;
++    }
++  }
++  {
++    char shown[INET_ADDRSTRLEN];
++    inet_ntop(AF_INET, &serv_addr.sin_addr, shown, sizeof(shown));
++    // NB: must be the C library call - unqualified printf() here resolves to
++    // Print::printf(), which routes into the unimplemented WiFiServer::write().
++    ::fprintf(stderr, "API server binding %s:%u\n", shown, (unsigned)_port);
++  }
++#endif
++
+   /* Now bind the host address using bind() call.*/
+   portduinoCheckNotNeg(
+       bind(psock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)),

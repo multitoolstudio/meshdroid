@@ -1,0 +1,26 @@
+# Meshdroid preset: rak19714
+# Source: meshtastic/firmware bin/config.d/lora-usb-rak19714.yaml
+
+Lora:
+  # Region: US   <- set from the Node tab; applied only while the node has no region
+  Module: sx1262
+  CS: 0
+  IRQ: 6
+  Reset: 2
+  Busy: 4
+  RXen: 1
+  DIO2_AS_RF_SWITCH: true
+  spidev: ch341
+  DIO3_TCXO_VOLTAGE: true
+  USB_PID: 0x5512
+  USB_VID: 0x1A86
+
+General:
+  MaxNodes: 200
+  MaxMessageQueue: 100
+  # No BlueZ on Android: MAC/NodeID derive from the dongle's USB serial.
+  # If your dongle has no unique serial (Pinedio v1), uncomment and set one:
+  # MACAddress: 02:00:00:12:34:56
+
+Logging:
+  LogLevel: info

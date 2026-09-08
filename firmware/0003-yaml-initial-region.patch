@@ -1,0 +1,113 @@
+diff --git a/src/main.cpp b/src/main.cpp
+index 6cf24cf..eb0726c 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -1239,6 +1239,10 @@ void setup()
+         router->addInterface(std::move(rIf));
+     }
+ 
++#if defined(ARCH_PORTDUINO) && !defined(ARCH_PORTDUINO_WASM)
++    portduinoApplyInitialRegion(); // config.yaml Lora.Region, only if the node has no region yet
++#endif
++
+     // This must be _after_ service.init because we need our preferences loaded from flash to have proper timeout values
+     PowerFSM_setup(); // we will transition to ON in a couple of seconds, FIXME, only do this for cold boots, not waking from SDS
+     powerFSMthread = new PowerFSMThread();
+diff --git a/src/platform/portduino/PortduinoGlue.cpp b/src/platform/portduino/PortduinoGlue.cpp
+index 7ac778e..f149607 100644
+--- a/src/platform/portduino/PortduinoGlue.cpp
++++ b/src/platform/portduino/PortduinoGlue.cpp
+@@ -10,7 +10,12 @@
+ #include "PortduinoGlue.h"
+ #include "SHA256.h"
+ #include "api/ServerAPI.h"
++#include "mesh/MeshRadio.h"     // regions[], initRegion()  (portduinoApplyInitialRegion)
++#include "mesh/MeshService.h"   // service->reloadConfig()
++#include "mesh/NodeDB.h"        // nodeDB->ensurePkiIdentity(), SEGMENT_*
++#include "mesh/RadioInterface.h" // validateConfigRegion/Lora
+ #include "meshUtils.h"
++#include <strings.h>            // strcasecmp
+ #include <ErriezCRC32.h>
+ #include <Utility.h>
+ #include <assert.h>
+@@ -941,6 +946,8 @@ bool loadConfig(const char *configPath)
+                     exit(EXIT_FAILURE);
+                 }
+             }
++            if (yamlConfig["Lora"]["Region"])
++                portduino_config.initial_region = yamlConfig["Lora"]["Region"].as<std::string>("");
+             if (yamlConfig["Lora"]["SX126X_MAX_POWER"])
+                 portduino_config.sx126x_max_power = yamlConfig["Lora"]["SX126X_MAX_POWER"].as<int>(22);
+             if (yamlConfig["Lora"]["SX128X_MAX_POWER"])
+@@ -1385,3 +1392,48 @@ void readGPIOFromYaml(YAML::Node sourceNode, pinMapping &destPin, int pinDefault
+     }
+ }
+ #endif // !ARCH_PORTDUINO_WASM
++
++
++// Mirrors AdminModule's set_config(lora) region path and the wasm port's wasm_set_region():
++// first-region keygen + enable tx -> initRegion() -> reloadConfig (reconfigure radio + persist).
++void portduinoApplyInitialRegion()
++{
++    const std::string &want = portduino_config.initial_region;
++    if (want.empty())
++        return;
++    if (config.lora.region != meshtastic_Config_LoRaConfig_RegionCode_UNSET) {
++        LOG_DEBUG("config.yaml Lora.Region=%s ignored: node already has a region", want.c_str());
++        return;
++    }
++    const RegionInfo *found = nullptr;
++    for (const RegionInfo *r = regions; r->code != meshtastic_Config_LoRaConfig_RegionCode_UNSET; r++) {
++        if (r->name && strcasecmp(r->name, want.c_str()) == 0) {
++            found = r;
++            break;
++        }
++    }
++    if (!found) {
++        LOG_ERROR("config.yaml Lora.Region '%s' is not a known region code (e.g. US, EU_868, EU_433, ANZ, JP)", want.c_str());
++        return;
++    }
++    meshtastic_Config_LoRaConfig validated = config.lora;
++    validated.region = found->code;
++    validated.tx_enabled = true;
++    if (!(RadioInterface::validateConfigRegion(validated) && RadioInterface::validateConfigLora(validated))) {
++        LOG_ERROR("config.yaml Lora.Region '%s' failed validation", want.c_str());
++        return;
++    }
++    LOG_INFO("Applying initial LoRa region %s from config.yaml", found->name);
++    int changes = SEGMENT_CONFIG;
++#if !(MESHTASTIC_EXCLUDE_PKI_KEYGEN || MESHTASTIC_EXCLUDE_PKI)
++    // Minting the key moves our node num with it, so persist devicestate + the node DB too.
++    config.lora = validated; // ensurePkiIdentity() checks the region before minting
++    if (nodeDB && nodeDB->ensurePkiIdentity())
++        changes |= SEGMENT_DEVICESTATE | SEGMENT_NODEDATABASE;
++#else
++    config.lora = validated;
++#endif
++    initRegion();
++    if (service)
++        service->reloadConfig(changes);
++}
+diff --git a/src/platform/portduino/PortduinoGlue.h b/src/platform/portduino/PortduinoGlue.h
+index 2072455..17d930a 100644
+--- a/src/platform/portduino/PortduinoGlue.h
++++ b/src/platform/portduino/PortduinoGlue.h
+@@ -67,6 +67,8 @@ extern std::ofstream JSONFile;
+ 
+ extern std::unique_ptr<Ch341Hal> ch341Hal;
+ int initGPIOPin(int pinNum, const std::string &gpioChipname, int line);
++/** Apply portduino_config.initial_region if the stored config has no region. Call once after setup(). */
++void portduinoApplyInitialRegion();
+ bool loadConfig(const char *configPath);
+ static bool ends_with(std::string_view str, std::string_view suffix);
+ void getMacAddr(uint8_t *dmac);
+@@ -93,6 +95,9 @@ extern struct portduino_config_struct {
+     uint32_t rfswitch_dio_pins[5] = {RADIOLIB_NC, RADIOLIB_NC, RADIOLIB_NC, RADIOLIB_NC, RADIOLIB_NC};
+     Module::RfSwitchMode_t rfswitch_table[8];
+     bool force_simradio = false;
++    // config.yaml Lora.Region: region to apply on boot if the node has none yet
++    // (firmware 2.8+ won't mint identity keys or transmit until a region is set).
++    std::string initial_region = "";
+     bool has_device_id = false;
+     uint8_t device_id[16] = {0};
+     std::string lora_spi_dev = "";
