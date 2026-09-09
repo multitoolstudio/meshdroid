@@ -29,8 +29,8 @@ android {
         applicationId = "studio.multitool.meshdroid"
         minSdk = 28
         targetSdk = 35
-        versionCode = 12
-        versionName = "1.2.7"
+        versionCode = 13
+        versionName = "1.2.8"
         ndk { abiFilters += listOf("arm64-v8a") }
 
         // Shown at the bottom of the Node tab. The commit is the one pinned in
@@ -107,5 +107,8 @@ dependencies {
     // DaemonState and the service use coroutines directly, so the dependency is
     // declared instead of inherited from the Compose and lifecycle artifacts.
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    // Lua for imported BBS modules. Pure Java, no native code, and small enough that the
+    // interpreter is not what costs battery here.
+    implementation("org.luaj:luaj-jse:3.0.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.2.8
+
+Imported BBS modules, written in Lua.
+
+- A module is a `.lua` file setting three globals: `keyword`, `help` and
+  `handle(request)`. Import it from the BBS settings screen and turn it on. Modules arrive
+  disabled, since adding a file and running it should be two decisions.
+- The interpreter is built up from the libraries a text command needs rather than taken
+  whole and trimmed. There is no io, no os, no require, no coroutines, and the loaders that
+  would compile fresh code or read another file are removed once the libraries are in place.
+- A script gets 200,000 instructions and 250 ms per call, enforced by a debug hook that
+  checks both. A loop that never ends is stopped rather than hanging the BBS.
+- A module cannot send anything. It returns text and the engine sends it, so the per-sender
+  cooldown, the airtime spacing and the 160 byte limit apply to imported modules exactly as
+  they do to built-in ones.
+- Storage is `mesh.get` and `mesh.set`, namespaced per file, capped at 100 keys of 2 KB.
+  Deleting a module deletes its storage.
+- Built-in keywords win a clash, so nothing imported can take over `admin`, `board` or
+  `mail`.
+- A script that fails to compile is skipped with its error shown next to the file, rather
+  than failing when somebody first uses it.
+- `docs/examples/hello.lua` is a working module to start from.
+
 ## 1.2.7
 
 Delivery confirmation, and a tidier Node tab.

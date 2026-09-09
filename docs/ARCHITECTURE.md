@@ -194,6 +194,9 @@ Kotlin, Jetpack Compose, Material 3. One module, no dependency injection.
 | `bbs/BbsEngine.kt` | Dispatches commands to modules, rate limits and spaces the replies. |
 | `bbs/BbsModule.kt` | The module interface and the parsed request handed to one. |
 | `bbs/BuiltinModules.kt` | help, about, ping, board, mail. |
+| `bbs/lua/LuaSandbox.kt` | A Lua interpreter with the dangerous parts left out, and the instruction and time limits. |
+| `bbs/lua/LuaModule.kt` | Wraps one script as a BbsModule, and the `mesh` host table. |
+| `bbs/lua/LuaModuleLoader.kt` | Import, enable, delete and load the scripts in files/bbs/apps. |
 | `bbs/Sanitize.kt` | Cleans text arriving from the mesh, and normalises mail addresses. |
 | `bbs/BbsStore.kt` | Bulletins and mail in SQLite. |
 | `bbs/BbsHolder.kt` | Process-wide owner; follows the node status and the setting. |
@@ -270,6 +273,18 @@ the first few entries rather than everything.
 The engine holds its own connection rather than sharing the Mesh tab's, so a BBS does not
 depend on a screen being open. That is one more proxy client, which costs nothing while
 sharing is on and takes the node's only slot when it is off.
+
+### Imported modules
+
+`bbs/lua` holds the sandbox, the module wrapper and the loader. The environment is
+constructed from BaseLib, TableLib, StringLib and MathLib, with DebugLib loaded only long
+enough to install an instruction hook and then removed from the globals so a script cannot
+lift its own limiter. `dofile`, `loadfile`, `load`, `print` and `require` are cleared after
+the libraries are in place.
+
+The design decision worth keeping: a module returns text and never sends anything. Every
+limit that protects the channel lives in the engine, so an imported script cannot transmit
+around them however it is written.
 
 ### Knowing a reply arrived
 

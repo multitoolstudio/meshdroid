@@ -1,5 +1,7 @@
 package studio.multitool.meshdroid.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -27,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -64,6 +67,21 @@ fun BbsSettingsScreen(onBack: () -> Unit) {
     var waiting by remember { mutableStateOf(0) }
     var confirmClear by remember { mutableStateOf<String?>(null) }
     var addError by remember { mutableStateOf<String?>(null) }
+    val luaEntries by engine.luaEntries.collectAsStateWithLifecycle()
+    var importError by remember { mutableStateOf<String?>(null) }
+
+    val importLua = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val name = uri.lastPathSegment?.substringAfterLast('/')
+                    engine.loaderHandle().import(uri, name)
+                    engine.reloadLuaModules()
+                }
+            }.onFailure { importError = it.message }
+        }
+    }
 
     fun refresh() = scope.launch {
         val snapshot = withContext(Dispatchers.IO) {
@@ -190,6 +208,68 @@ fun BbsSettingsScreen(onBack: () -> Unit) {
                         })
                     }
                 )
+            }
+        }
+
+        // ---- imported modules ----
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(vertical = 8.dp)) {
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.lua_title), style = MaterialTheme.typography.titleSmall) },
+                    supportingContent = { Text(stringResource(R.string.lua_detail)) }
+                )
+                Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { importLua.launch(arrayOf("*/*")) }) {
+                        Text(stringResource(R.string.lua_import))
+                    }
+                    TextButton(onClick = { scope.launch { withContext(Dispatchers.IO) { engine.reloadLuaModules() } } }) {
+                        Text(stringResource(R.string.lua_reload))
+                    }
+                }
+                importError?.let {
+                    Text(stringResource(R.string.lua_import_failed, it), Modifier.padding(horizontal = 16.dp),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+                if (luaEntries.isEmpty()) {
+                    ListItem(headlineContent = {
+                        Text(stringResource(R.string.lua_none), style = MaterialTheme.typography.bodySmall)
+                    })
+                }
+                luaEntries.forEach { entry ->
+                    ListItem(
+                        headlineContent = { Text(entry.fileName, style = MaterialTheme.typography.bodyMedium) },
+                        supportingContent = {
+                            Text(
+                                entry.error?.let { stringResource(R.string.lua_error, it) }
+                                    ?: entry.keyword?.let { stringResource(R.string.lua_keyword, it) }
+                                    ?: stringResource(R.string.lua_disabled),
+                                color = if (entry.error != null) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        trailingContent = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        withContext(Dispatchers.IO) {
+                                            engine.loaderHandle().delete(entry.fileName)
+                                            engine.reloadLuaModules()
+                                        }
+                                    }
+                                }) { Text(stringResource(R.string.lua_delete)) }
+                                Switch(checked = entry.enabled, onCheckedChange = { v ->
+                                    scope.launch {
+                                        withContext(Dispatchers.IO) {
+                                            engine.loaderHandle().setEnabled(entry.fileName, v)
+                                            engine.reloadLuaModules()
+                                        }
+                                    }
+                                })
+                            }
+                        }
+                    )
+                }
             }
         }
 

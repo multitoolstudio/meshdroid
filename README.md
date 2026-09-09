@@ -146,6 +146,11 @@ Direct messages to the node are treated as commands. Channel messages count only
 start with `!`, so ordinary conversation is left alone. Replies are spaced out and limited
 per sender, because the channel is shared.
 
+Commands can be added by importing a Lua file from the settings screen. Imported modules run
+sandboxed, with no file, network or radio access, under an instruction and time limit, and
+each is off until you turn it on. See
+[docs/examples](docs/examples/) for a working module and what the API looks like.
+
 The tab carries a console that runs a command locally without transmitting, which is the
 quickest way to see what a command does.
 

@@ -13,7 +13,7 @@ import android.database.sqlite.SQLiteOpenHelper
  * the app's private storage alongside the node's own files and is not part of the node
  * backup, since it belongs to Meshdroid rather than to meshtasticd.
  */
-class BbsStore(ctx: Context) : SQLiteOpenHelper(ctx, "bbs.db", null, 3) {
+class BbsStore(ctx: Context) : SQLiteOpenHelper(ctx, "bbs.db", null, 4) {
 
     data class Bulletin(val id: Long, val from: String, val title: String, val text: String, val at: Long)
     data class Mail(val id: Long, val from: String, val to: String, val text: String, val at: Long)
@@ -43,11 +43,20 @@ class BbsStore(ctx: Context) : SQLiteOpenHelper(ctx, "bbs.db", null, 3) {
         // Mail is read by recipient, and unread mail first.
         db.execSQL("CREATE INDEX mail_recipient ON mail (recipient, delivered)")
         createAdmins(db)
+        createLuaKv(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
         if (old < 2) createAdmins(db)
         if (old < 3) db.execSQL("ALTER TABLE bulletins ADD COLUMN title TEXT NOT NULL DEFAULT ''")
+        if (old < 4) createLuaKv(db)
+    }
+
+    private fun createLuaKv(db: SQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS lua_kv (module TEXT NOT NULL, k TEXT NOT NULL, " +
+                "v TEXT NOT NULL, PRIMARY KEY (module, k))"
+        )
     }
 
     private fun createAdmins(db: SQLiteDatabase) {
@@ -193,6 +202,30 @@ class BbsStore(ctx: Context) : SQLiteOpenHelper(ctx, "bbs.db", null, 3) {
 
     fun mailCount(): Int =
         readableDatabase.rawQuery("SELECT COUNT(*) FROM mail", null).use { c -> if (c.moveToNext()) c.getInt(0) else 0 }
+
+    // ---- storage for Lua modules ----
+    // One namespace per script file, so two modules cannot read or overwrite each other.
+
+    fun luaGet(module: String, key: String): String? =
+        readableDatabase.rawQuery("SELECT v FROM lua_kv WHERE module = ? AND k = ?", arrayOf(module, key))
+            .use { c -> if (c.moveToNext()) c.getString(0) else null }
+
+    fun luaSet(module: String, key: String, value: String) {
+        writableDatabase.insertWithOnConflict("lua_kv", null, ContentValues().apply {
+            put("module", module); put("k", key); put("v", value)
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun luaDelete(module: String, key: String) {
+        writableDatabase.delete("lua_kv", "module = ? AND k = ?", arrayOf(module, key))
+    }
+
+    fun luaKeyCount(module: String): Int =
+        readableDatabase.rawQuery("SELECT COUNT(*) FROM lua_kv WHERE module = ?", arrayOf(module))
+            .use { c -> if (c.moveToNext()) c.getInt(0) else 0 }
+
+    /** Called when a module is deleted, so an uninstalled script leaves nothing behind. */
+    fun luaClear(module: String): Int = writableDatabase.delete("lua_kv", "module = ?", arrayOf(module))
 
     private fun now() = System.currentTimeMillis() / 1000
 }

@@ -72,20 +72,56 @@ class BbsEngine(private val ctx: Context, private val link: MeshLink = Meshtasti
     /** Delivery results by packet id, filled by the ack collector and read by the outbox. */
     private val acks = java.util.concurrent.ConcurrentHashMap<Int, Boolean>()
 
+    private val builtins: MutableList<BbsModule> = mutableListOf()
     private val modules: MutableList<BbsModule> = mutableListOf()
+    private val loader = studio.multitool.meshdroid.bbs.lua.LuaModuleLoader(ctx.applicationContext, store)
+
+    private val _luaEntries = MutableStateFlow<List<studio.multitool.meshdroid.bbs.lua.LuaModuleLoader.Entry>>(emptyList())
+    val luaEntries: StateFlow<List<studio.multitool.meshdroid.bbs.lua.LuaModuleLoader.Entry>> = _luaEntries
 
     init {
-        modules += HelpModule { modules.toList() }
-        modules += AboutModule { link.selfNode.value?.toString() }
-        modules += PingModule()
-        modules += BoardModule()
-        modules += MailModule()
-        modules += AdminModule(
+        builtins += HelpModule { modules.toList() }
+        builtins += AboutModule { link.selfNode.value?.toString() }
+        builtins += PingModule()
+        builtins += BoardModule()
+        builtins += MailModule()
+        builtins += AdminModule(
             requirePki = { Settings.bbsAdminRequiresPki(ctx) },
             locked = { Settings.bbsLocked(ctx) },
             setLocked = { Settings.setBbsLocked(ctx, it) }
         )
+        reloadLuaModules()
     }
+
+    /**
+     * Rebuilds the command list from the built-ins plus whatever Lua modules are enabled.
+     *
+     * A built-in always wins a clash of keywords. An imported script cannot take over
+     * `admin`, and nobody's board can be cleared by a module that claimed the word.
+     */
+    fun reloadLuaModules() {
+        // The fallback names LuaModule rather than BbsModule so the list keeps the concrete
+        // type; fileName is on the module, not on the interface.
+        val (lua, entries) = runCatching { loader.loadEnabled() }
+            .getOrElse { emptyList<studio.multitool.meshdroid.bbs.lua.LuaModule>() to emptyList() }
+        _luaEntries.value = entries
+        val taken = builtins.map { it.keyword }.toMutableSet()
+        val accepted = lua.filter { m ->
+            if (m.keyword in taken) {
+                DaemonState.appendLog("[meshdroid] BBS module ${m.fileName} wanted the keyword ${m.keyword}, which is taken")
+                false
+            } else {
+                taken += m.keyword
+                true
+            }
+        }
+        modules.clear()
+        modules += builtins
+        modules += accepted
+        if (accepted.isNotEmpty()) DaemonState.appendLog("[meshdroid] BBS loaded ${accepted.size} imported module(s)")
+    }
+
+    fun loaderHandle(): studio.multitool.meshdroid.bbs.lua.LuaModuleLoader = loader
 
     fun start() {
         if (_running.value) return

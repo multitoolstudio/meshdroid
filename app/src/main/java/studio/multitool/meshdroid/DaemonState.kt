@@ -215,6 +215,10 @@ object Settings {
     fun bbsLocked(ctx: Context) = prefs(ctx).getBoolean("bbs_locked", false)
     fun setBbsLocked(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("bbs_locked", v).apply()
 
+    /** File names of the imported Lua modules the operator has enabled. */
+    fun luaEnabled(ctx: Context): Set<String> = prefs(ctx).getStringSet("lua_enabled", emptySet()) ?: emptySet()
+    fun setLuaEnabled(ctx: Context, v: Set<String>) = prefs(ctx).edit().putStringSet("lua_enabled", v).apply()
+
     fun bbsCooldownSeconds(ctx: Context) = prefs(ctx).getInt("bbs_cooldown", 10)
     fun setBbsCooldownSeconds(ctx: Context, v: Int) = prefs(ctx).edit().putInt("bbs_cooldown", v).apply()
 

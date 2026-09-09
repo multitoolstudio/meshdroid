@@ -48,6 +48,17 @@
     <string name="bbs_activity">Activity</string>
     <string name="bbs_console">Try a command locally</string>
     <string name="bbs_run">Run</string>
+    <string name="lua_title">Imported modules</string>
+    <string name="lua_detail">Lua scripts that add commands. They run sandboxed, with no file, network or radio access, and each one is off until you turn it on.</string>
+    <string name="lua_import">Import a .lua file</string>
+    <string name="lua_reload">Reload</string>
+    <string name="lua_none">None imported.</string>
+    <string name="lua_keyword">Answers %1$s</string>
+    <string name="lua_disabled">Off</string>
+    <string name="lua_error">Did not load: %1$s</string>
+    <string name="lua_import_failed">Import failed: %1$s</string>
+    <string name="lua_delete">Delete</string>
+
     <string name="bbs_storage">Stored</string>
     <string name="bbs_storage_detail">%1$d bulletins, %2$d messages (%3$d waiting to be collected)</string>
     <string name="bbs_clear_board">Clear board</string>
