@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.2.3
+
+The multiplexing proxy. Several clients can share the node at once.
+
+- meshtasticd now listens on loopback port 4404 and Meshdroid owns 4403, holding the
+  daemon's one connection and fanning it out. The Meshtastic app, the Mesh tab and the
+  Python CLI can all be attached together.
+- Config dumps are routed to the client that asked for them, in the order they asked,
+  rather than broadcast. Live traffic goes to everyone.
+- A disconnect from one client is handled locally and never forwarded, since telling the
+  daemon to close the upstream connection would drop every other client with it.
+- On by default. The Node tab has a switch that turns it off and hands 4403 straight back
+  to the daemon, restoring the previous one-client behaviour.
+- With the proxy on, LAN access is the proxy's listener and the daemon stays on loopback
+  whatever the LAN switch says. Firmware patch 0002 still carries that switch when the
+  proxy is off.
+- The Mesh tab reports how many other clients are attached.
+
 ## 1.2.2
 
 - Fixed the message row on the Mesh tab being laid out below the navigation bar, which

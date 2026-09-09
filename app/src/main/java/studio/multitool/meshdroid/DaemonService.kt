@@ -58,6 +58,7 @@ class DaemonService : Service() {
     private var process: Process? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var battery: BatteryReporter? = null
+    private var proxy: studio.multitool.meshdroid.mesh.MeshProxy? = null
 
     /** True while a stop or restart is tearing the daemon down, so its exit is not an error. */
     @Volatile private var teardown = false
@@ -168,10 +169,16 @@ class DaemonService : Service() {
             fail("Could not create the USB hand-off socket: ${e.message}"); return
         }
 
+        // With the proxy on, the daemon moves to loopback 4404 and Meshdroid owns 4403.
+        val useProxy = Settings.proxyEnabled(this)
+        val daemonPort = if (useProxy) Settings.DAEMON_PORT else Settings.API_PORT
+
         killStaleDaemons()
-        if (!waitForFreePort()) {
-            fail("Port ${Settings.API_PORT} is already in use by another process (a leftover test daemon? run: adb shell pkill -f mtd).")
-            return
+        for (port in listOfNotNull(daemonPort, if (useProxy) Settings.API_PORT else null)) {
+            if (!waitForFreePort(port)) {
+                fail("Port $port is already in use by another process (a leftover test daemon? run: adb shell pkill -f mtd).")
+                return
+            }
         }
 
         NodeFiles.ensureDefaultConfig(this)
@@ -181,7 +188,7 @@ class DaemonService : Service() {
         if (!bin.exists()) { fail("Daemon binary missing from this build."); return }
 
         val args = mutableListOf(bin.absolutePath, "-c", config.absolutePath, "-d", fsDir.absolutePath,
-            "-p", Settings.API_PORT.toString())
+            "-p", daemonPort.toString())
         if (Settings.verbose(this)) args += "-v"
 
         val lan = Settings.lanEnabled(this)
@@ -196,10 +203,16 @@ class DaemonService : Service() {
             put("PINEDIO_USB_FD_SOCKET", socketName)
             put("HOME", filesDir.absolutePath)
             put("LD_LIBRARY_PATH", applicationInfo.nativeLibraryDir)   // libc++_shared.so is packaged beside the binary
-            put("MESHTASTICD_BIND_ADDR", if (lan) "0.0.0.0" else "127.0.0.1")
+            // The daemon never binds beyond loopback when the proxy is in front of it;
+            // reaching the LAN is then the proxy's listener, not the daemon's.
+            put("MESHTASTICD_BIND_ADDR", if (lan && !useProxy) "0.0.0.0" else "127.0.0.1")
             if (reportBattery) put("MESHTASTICD_BATTERY_FILE", batteryFile.absolutePath)
         }
-        DaemonState.appendLog("[meshdroid] starting meshtasticd, API ${if (lan) "on LAN + localhost" else "localhost only"}:${Settings.API_PORT}")
+        DaemonState.appendLog(
+            "[meshdroid] starting meshtasticd on port $daemonPort, clients use ${Settings.API_PORT} " +
+                (if (useProxy) "through the proxy" else "directly") +
+                (if (lan) ", reachable from the LAN" else ", localhost only")
+        )
 
         val p = try { pb.start() } catch (e: Exception) {
             fail("Could not launch the daemon: ${e.message}"); return
@@ -209,6 +222,17 @@ class DaemonService : Service() {
         // Started after the daemon so the first reading lands while it is still booting,
         // which is well inside the daemon's staleness window.
         if (reportBattery) battery = BatteryReporter(this, batteryFile).also { it.start() }
+        if (useProxy) {
+            // The proxy retries its upstream connection, so starting it before the daemon
+            // has finished binding is fine.
+            runCatching {
+                proxy = studio.multitool.meshdroid.mesh.MeshProxy(Settings.API_PORT, Settings.DAEMON_PORT, lan)
+                    .also { it.start() }
+            }.onFailure {
+                DaemonState.appendLog("[meshdroid] proxy failed to start: ${it.message}. Clients cannot reach the node.")
+                proxy = null
+            }
+        }
         readStdout(p)
         startWatchdog(lan)
     }
@@ -269,6 +293,8 @@ class DaemonService : Service() {
         watchdog?.cancel(); watchdog = null
         if (process != null && DaemonState.status.value != NodeStatus.ERROR)
             DaemonState.setStatus(NodeStatus.STOPPING, "Stopping node…")
+        // Stopped before the daemon so clients see a clean close rather than a stall.
+        runCatching { proxy?.stop() }; proxy = null
         runCatching { battery?.stop() }; battery = null
         stopDaemonProcess()
         runCatching { fdServer?.stop() }; fdServer = null
@@ -356,11 +382,11 @@ class DaemonService : Service() {
      * Waits for the API port to become free. A restart can reach here while the
      * previous daemon's listening socket is still being torn down by the kernel.
      */
-    private fun waitForFreePort(): Boolean {
+    private fun waitForFreePort(port: Int): Boolean {
         val deadline = System.currentTimeMillis() + 4000
         while (true) {
             val free = runCatching {
-                java.net.ServerSocket().use { it.reuseAddress = true; it.bind(java.net.InetSocketAddress("0.0.0.0", Settings.API_PORT)) }
+                java.net.ServerSocket().use { it.reuseAddress = true; it.bind(java.net.InetSocketAddress("0.0.0.0", port)) }
                 true
             }.getOrDefault(false)
             if (free) return true

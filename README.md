@@ -124,8 +124,8 @@ with a box to broadcast a message.
 each. Barometric pressure and ambient light can be published to the mesh as environment
 telemetry, off by default, sent every 30 minutes while the link is connected.
 
-meshtasticd accepts one client, so while this is connected the Meshtastic app cannot be.
-Disconnect to hand the slot back. This tab is the foundation for the BBS: the link it uses
+With the proxy on, connecting here leaves the Meshtastic app connected too. With it off,
+meshtasticd accepts one client and connecting here disconnects that app. This tab is the foundation for the BBS: the link it uses
 is an interface, so the same code will work through a multiplexer later, and against
 MeshCore after that.
 
@@ -161,8 +161,10 @@ Linux install's files can be zipped up the same way and restored on the phone.
   runs. Expect a noticeable share of battery per hour. Stop releases the wake
   lock. The node reports the phone's charge to the mesh, so other operators can
   see it draining.
-- **One client at a time.** meshtasticd's TCP API accepts a single connection.
-  Connecting the Python CLI disconnects the phone app and the other way round.
+- **Sharing the node.** meshtasticd's TCP API accepts a single connection. Meshdroid holds
+  it and shares it, so the Meshtastic app, the Mesh tab and the Python CLI can be attached
+  at once. Turning off *Share the node with several apps* in the Node tab restores the
+  one-client behaviour.
 - **No Bluetooth.** The phone app connects over TCP, not BLE, by design.
 
 ## Troubleshooting
@@ -172,7 +174,7 @@ Linux install's files can be zipped up the same way and restored on the phone.
 | "No CH341 radio found" | Check the OTG adapter or cable. Settings > Connected devices should list the dongle. |
 | Node error: could not open the USB radio | Permission was denied, or another app holds the device. Unplug, replug, accept the prompt. |
 | Node error: port 4403 in use | Another process on the phone is listening on 4403. If you ran the sim-radio test from `docs/BUILDING.md`, stop it: `adb shell pkill -f /data/local/tmp/mtd`. |
-| Meshtastic app connects, then hangs | Only one client can be attached. Close the Python CLI or any other client. |
+| Meshtastic app connects, then hangs | Turn on *Share the node with several apps* in the Node tab, or close whatever else is attached. |
 | Keys blank in the Meshtastic app, `/prefs/config.proto does not exist` in the log | The LoRa region is unset. Set it in the Node tab. |
 | Node restarts on its own | USB power. Lower `SX126X_MAX_POWER` in the Config tab or use a powered hub. |
 | Status stays *Starting* | After 30 seconds Meshdroid says so and points at the Logs tab. Usually the pinmap in the Config tab does not match the dongle, or the radio is not answering on SPI. |

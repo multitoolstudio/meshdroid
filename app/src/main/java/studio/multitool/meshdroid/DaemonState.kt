@@ -78,6 +78,12 @@ object DaemonState {
 
     fun setBattery(r: BatteryReporter.Reading?) { _battery.value = r }
 
+    /** Clients attached to the proxy, or zero when the proxy is off. */
+    private val _proxyClients = MutableStateFlow(0)
+    val proxyClients: StateFlow<Int> = _proxyClients
+
+    fun setProxyClients(n: Int) { _proxyClients.value = n }
+
     fun setStatus(s: NodeStatus, detail: String? = null) {
         _status.value = s
         if (detail != null) _detail.value = detail
@@ -154,7 +160,11 @@ object DaemonState {
  * first call on a background thread; everything after it is served from memory.
  */
 object Settings {
+    /** Port clients connect to. The proxy owns it when enabled, the daemon when not. */
     const val API_PORT = 4403
+
+    /** Loopback port the daemon listens on while the proxy owns API_PORT. */
+    const val DAEMON_PORT = 4404
     /** Seconds to wait for "init result 0" before telling the user to look at the log. */
     const val START_TIMEOUT_S = 30L
     /** Seconds the daemon gets to exit after SIGTERM before it is killed. */
@@ -177,6 +187,11 @@ object Settings {
 
     fun autoStart(ctx: Context) = prefs(ctx).getBoolean("autostart", true)
     fun setAutoStart(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("autostart", v).apply()
+
+    // With the proxy on, several clients share the node's single API connection. Off hands
+    // port 4403 straight back to the daemon and restores the one-client behaviour.
+    fun proxyEnabled(ctx: Context) = prefs(ctx).getBoolean("proxy", true)
+    fun setProxyEnabled(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("proxy", v).apply()
 
     fun batteryReport(ctx: Context) = prefs(ctx).getBoolean("battery", true)
     fun setBatteryReport(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("battery", v).apply()

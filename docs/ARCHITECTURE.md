@@ -191,6 +191,7 @@ Kotlin, Jetpack Compose, Material 3. One module, no dependency injection.
 | `mesh/MeshLink.kt` | The transport interface and its domain types. Nothing above it sees a protobuf. |
 | `mesh/MeshtasticTcpLink.kt` | MeshLink over meshtasticd's TCP API: framing, the want_config handshake, heartbeats, reconnect. |
 | `mesh/StreamFrames.kt` | The 0x94 0xc3 length-prefixed framing, with resync. |
+| `mesh/MeshProxy.kt` | Shares the daemon's single API connection between several clients. |
 | `mesh/MeshLinkHolder.kt` | Process-wide owner of the link and a capped event history for the Mesh tab. |
 | `PhoneSensors.kt` | Runtime probe of the phone's environment sensors, and one-shot reads. |
 | `EnvironmentReporter.kt` | Publishes pressure and light over the mesh link on an interval. |
@@ -220,8 +221,19 @@ and this link could both be connected; that is the piece that would let the BBS 
 without displacing the Meshtastic app. Neither should be visible above `MeshLink`, so the
 BBS and the phone sensor telemetry are written against the interface only.
 
-Until the proxy exists, connecting takes the daemon's only client slot and the Meshtastic
-app is disconnected for the duration. The Mesh tab says so, and the link is off by default.
+`MeshProxy` is that piece, and it is on by default. The daemon listens on loopback 4404,
+Meshdroid owns 4403 and holds the daemon's one connection, and clients attach to Meshdroid.
+MeshLink needs no special case for it: it connects to 4403 like any other client.
+
+Routing is the only part with judgement in it. A client opens with a `want_config_id` nonce
+and expects the config dump back, so those frames go to the client that asked, in the order
+clients asked, ending on the matching `config_complete_id`. Mesh packets, queue status and
+notifications are broadcast, since they belong to no handshake. A `disconnect` from a client
+is handled locally and never forwarded, because the daemon would close the upstream
+connection and take every other client with it.
+
+Turning the proxy off hands 4403 back to the daemon and restores the one-client behaviour,
+which is the fallback if the proxy ever misbehaves in the path of the Meshtastic app.
 
 Protobuf definitions are vendored under `app/src/main/proto` at a pinned commit and
 compiled by the Gradle protobuf plugin with the javalite runtime. The pin matters for the

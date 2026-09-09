@@ -32,6 +32,9 @@
     <string name="link_error">Link error</string>
     <string name="link_explain">Connects to the node the way the Meshtastic app does. The daemon accepts one client, so connecting here disconnects that app.</string>
     <string name="link_takes_slot">Holding the node\'s single client slot. The Meshtastic app cannot connect until you disconnect.</string>
+    <string name="link_shared">Connected through the proxy, sharing the node with %1$d other client(s).</string>
+    <string name="link_shared_alone">Connected through the proxy. Other apps can connect at the same time.</string>
+    <string name="link_explain_proxy">Connects to the node the way the Meshtastic app does. The proxy is on, so both can be attached at once.</string>
     <string name="link_needs_node">Start the node first.</string>
     <string name="link_self">This node  %1$s</string>
     <string name="btn_connect">Connect</string>
@@ -67,6 +70,10 @@
     <string name="item_lan">Allow LAN access</string>
     <string name="item_lan_on">Other devices on Wi-Fi can connect and reconfigure this node.</string>
     <string name="item_lan_off">API reachable only from this phone. Recommended.</string>
+
+    <string name="item_proxy">Share the node with several apps</string>
+    <string name="item_proxy_on">Meshdroid holds the node\'s one connection and shares it, so the Meshtastic app, the Mesh tab and the CLI can all be attached at once. Applies on the next start.</string>
+    <string name="item_proxy_off">The node accepts one client at a time. Connecting anything disconnects whatever was attached.</string>
 
     <string name="item_autostart">Start when radio is plugged in</string>
 

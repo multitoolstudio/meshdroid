@@ -87,6 +87,7 @@ fun NodeScreen(
     var lan by remember { mutableStateOf(false) }
     var autoStart by remember { mutableStateOf(true) }
     var batteryReport by remember { mutableStateOf(true) }
+    var proxy by remember { mutableStateOf(true) }
     var confirmReset by remember { mutableStateOf(false) }
     var region by remember { mutableStateOf<String?>(null) }
     var regionMenu by remember { mutableStateOf(false) }
@@ -97,9 +98,9 @@ fun NodeScreen(
     // again whenever config.yaml changes (an import, a restore, or the Config tab).
     LaunchedEffect(Unit) {
         val values = withContext(Dispatchers.IO) {
-            Triple(Settings.lanEnabled(ctx), Settings.autoStart(ctx), Settings.batteryReport(ctx))
+            listOf(Settings.lanEnabled(ctx), Settings.autoStart(ctx), Settings.batteryReport(ctx), Settings.proxyEnabled(ctx))
         }
-        lan = values.first; autoStart = values.second; batteryReport = values.third
+        lan = values[0]; autoStart = values[1]; batteryReport = values[2]; proxy = values[3]
     }
     LaunchedEffect(configVersion) {
         region = withContext(Dispatchers.IO) { runCatching { NodeFiles.readRegion(ctx) }.getOrNull() }
@@ -229,6 +230,20 @@ fun NodeScreen(
                             lan = v
                             scope.launch {
                                 withContext(Dispatchers.IO) { Settings.setLanEnabled(ctx, v) }
+                                if (running) snackbar.showSnackbar(ctx.getString(R.string.snack_restart_to_apply))
+                            }
+                        })
+                    }
+                )
+                HorizontalDivider()
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.item_proxy)) },
+                    supportingContent = { Text(stringResource(if (proxy) R.string.item_proxy_on else R.string.item_proxy_off)) },
+                    trailingContent = {
+                        Switch(checked = proxy, onCheckedChange = { v ->
+                            proxy = v
+                            scope.launch {
+                                withContext(Dispatchers.IO) { Settings.setProxyEnabled(ctx, v) }
                                 if (running) snackbar.showSnackbar(ctx.getString(R.string.snack_restart_to_apply))
                             }
                         })

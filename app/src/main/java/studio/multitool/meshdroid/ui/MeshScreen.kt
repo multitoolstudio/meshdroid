@@ -79,6 +79,7 @@ fun MeshScreen() {
     val linkStatus by MeshLinkHolder.link.status.collectAsStateWithLifecycle()
     val selfNode by MeshLinkHolder.link.selfNode.collectAsStateWithLifecycle()
     val history by MeshLinkHolder.history.collectAsStateWithLifecycle()
+    val proxyClients by DaemonState.proxyClients.collectAsStateWithLifecycle()
     var draft by remember { mutableStateOf("") }
     val published by (MeshLinkHolder.environment?.last ?: MutableStateFlow(null)).collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
@@ -108,8 +109,13 @@ fun MeshScreen() {
                     color = if (linkStatus == LinkStatus.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    if (connected) stringResource(R.string.link_takes_slot)
-                    else stringResource(R.string.link_explain),
+                    when {
+                        connected && proxyClients > 1 -> stringResource(R.string.link_shared, proxyClients - 1)
+                        connected && proxyClients == 1 -> stringResource(R.string.link_shared_alone)
+                        connected -> stringResource(R.string.link_takes_slot)
+                        proxyClients > 0 -> stringResource(R.string.link_explain_proxy)
+                        else -> stringResource(R.string.link_explain)
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
