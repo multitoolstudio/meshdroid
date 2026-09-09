@@ -1,0 +1,22 @@
+diff --git a/src/modules/Telemetry/DeviceTelemetry.cpp b/src/modules/Telemetry/DeviceTelemetry.cpp
+index 1a2b3c4..5d6e7f8 100644
+--- a/src/modules/Telemetry/DeviceTelemetry.cpp
++++ b/src/modules/Telemetry/DeviceTelemetry.cpp
+@@ -105,5 +105,17 @@
+     t.variant.device_metrics.air_util_tx = airTime->utilizationTXPercent();
++    // MESHDROID_PHONE_BATTERY: a phone-hosted node has a real battery that stays worth
++    // reporting while it charges. The phone can sit on a powered hub and still be the
++    // part of the node that dies first, and its level is the number other operators
++    // want. Upstream replaces the level with MAGIC_USB_BATTERY_LEVEL whenever the node
++    // is charging, which on a phone throws away the only interesting reading. Here the
++    // magic value is kept for nodes with no battery at all, which is what a Linux box
++    // without this patch's file source still reports.
++#if defined(ARCH_PORTDUINO) && !defined(ARCH_PORTDUINO_WASM)
++    t.variant.device_metrics.battery_level =
++        !powerStatus->getHasBattery() ? MAGIC_USB_BATTERY_LEVEL : powerStatus->getBatteryChargePercent();
++#else
+     t.variant.device_metrics.battery_level = (!powerStatus->getHasBattery() || powerStatus->getIsCharging())
+                                                  ? MAGIC_USB_BATTERY_LEVEL
+                                                  : powerStatus->getBatteryChargePercent();
++#endif
+     t.variant.device_metrics.channel_utilization = airTime->channelUtilizationPercent();

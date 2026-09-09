@@ -83,13 +83,20 @@ class BatteryReporter(private val ctx: Context, private val file: File) {
         return Reading(percent, mv, charging, powered)
     }
 
+    // The broadcast receiver runs on the main thread and the heartbeat on its own, and
+    // writeAtomically stages through one fixed temporary name. Two writers at once means
+    // the second rename finds its source already moved, so writes are serialised here.
+    private val writeLock = Any()
+
     private fun write(r: Reading) {
         if (r.percent < 0) return
         last = r
         val line = "pct=${r.percent} mv=${r.millivolts} charging=${if (r.charging) 1 else 0} " +
             "powered=${if (r.powered) 1 else 0} ts=${System.currentTimeMillis() / 1000}\n"
-        runCatching { NodeFiles.writeAtomically(file, line.toByteArray()) }
-            .onFailure { DaemonState.appendLog("[meshdroid] could not write the battery file: ${it.message}") }
+        synchronized(writeLock) {
+            runCatching { NodeFiles.writeAtomically(file, line.toByteArray()) }
+                .onFailure { DaemonState.appendLog("[meshdroid] could not write the battery file: ${it.message}") }
+        }
         DaemonState.setBattery(r)
     }
 

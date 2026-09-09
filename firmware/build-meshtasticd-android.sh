@@ -10,6 +10,7 @@
 #        0003  firmware: config.yaml Lora.Region applied on first boot
 #        0004  firmware: SIGTERM saves the node data and exits (needs 0003 first)
 #        0005  firmware: battery level read from a host-written file
+#        0006  firmware: keep reporting the battery level while charging
 #   3. Export the TARGET_* variables that platform-native's "buildroot" board
 #      reads, pointing at the NDK toolchain, and run pio.
 #   4. Verify the built binary carries the strings the app depends on, then strip
@@ -135,6 +136,13 @@ if ! grep -q "portduinoFileBatteryInit" "$FW/src/Power.cpp"; then
 fi
 grep -q "portduinoFileBatteryInit" "$FW/src/Power.cpp" || {
   echo "!! patch 0005 did not apply to src/Power.cpp."; exit 1; }
+DEVICE_TELEMETRY="$FW/src/modules/Telemetry/DeviceTelemetry.cpp"
+if ! grep -q "MESHDROID_PHONE_BATTERY" "$DEVICE_TELEMETRY"; then
+  echo ">> patching firmware to report the battery level while charging (0006)"
+  patch -p1 -d "$FW" < "$ROOT/0006-portduino-battery-while-charging.patch"
+fi
+grep -q "MESHDROID_PHONE_BATTERY" "$DEVICE_TELEMETRY" || {
+  echo "!! patch 0006 did not apply to DeviceTelemetry.cpp; the node will report PWR whenever it charges."; exit 1; }
 for marker in portduinoApplyInitialRegion portduinoCheckShutdown; do
   grep -q "$marker" "$FW/src/platform/portduino/PortduinoGlue.cpp" || {
     echo "!! $marker missing from PortduinoGlue.cpp; patch 0003 or 0004 failed."; exit 1; }

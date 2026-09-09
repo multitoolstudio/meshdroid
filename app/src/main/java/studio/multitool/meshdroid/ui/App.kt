@@ -5,6 +5,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
@@ -46,6 +47,7 @@ fun MeshdroidTheme(content: @Composable () -> Unit) {
 private enum class Tab(val route: String, val label: Int, val icon: ImageVector) {
     NODE("node", R.string.tab_node, Icons.Filled.Hub),
     CONFIG("config", R.string.tab_config, Icons.Filled.Description),
+    MESH("mesh", R.string.tab_mesh, Icons.Filled.Forum),
     LOGS("logs", R.string.tab_logs, Icons.Filled.Terminal),
 }
 
@@ -81,6 +83,7 @@ fun MeshdroidApp(
         NavHost(nav, startDestination = Tab.NODE.route, modifier = Modifier.padding(inner)) {
             composable(Tab.NODE.route) { NodeScreen(radioPresent, notificationsDenied, onStart, onStop, onRestart, onClose) }
             composable(Tab.CONFIG.route) { ConfigScreen(onRestart) }
+            composable(Tab.MESH.route) { MeshScreen() }
             composable(Tab.LOGS.route) { LogsScreen() }
         }
     }

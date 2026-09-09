@@ -60,7 +60,7 @@ instead of glibc.
 
 ## The patches
 
-All five are applied by `build-meshtasticd-android.sh` and are idempotent; the
+All six are applied by `build-meshtasticd-android.sh` and are idempotent; the
 script checks for a marker string before applying each one, and fails if a
 marker is still missing afterwards. 0004 appends to the function 0003 adds, so
 they are applied in order.
@@ -164,6 +164,20 @@ a low battery deep sleep after ten readings below it. A percentage-only source t
 passed zero through would shut the daemon down about a minute after the phone came
 off the charger.
 
+### 0006: firmware, keep the battery level while charging
+
+Target: `src/modules/Telemetry/DeviceTelemetry.cpp` in the firmware checkout.
+
+Upstream replaces the battery level with `MAGIC_USB_BATTERY_LEVEL`, the 101 that
+clients display as PWR, whenever the node reports itself as charging. That is right
+for a board whose battery is a backup for its USB supply, and wrong for a phone,
+where the charge level is the only interesting number and stays interesting while
+it charges. The patch keeps the magic value for nodes with no battery at all and
+reports the level otherwise, on portduino only.
+
+The trade is that other operators no longer see a plug icon for this node. They see
+a percentage, which happens to be climbing.
+
 ## The app
 
 Kotlin, Jetpack Compose, Material 3. One module, no dependency injection.
@@ -174,6 +188,12 @@ Kotlin, Jetpack Compose, Material 3. One module, no dependency injection.
 | `DaemonService.kt` | Foreground service that owns the daemon process: opens USB, holds a wake lock, starts the fd socket, launches the binary, streams its stdout, tears down cleanly. Signals orphaned daemons from a crashed earlier run and waits for port 4403 before starting. Every transition runs on its own control thread. |
 | `UsbFdServer.kt` | The abstract Unix socket that hands the USB descriptor to the daemon, after checking that the peer is this app. |
 | `DaemonState.kt` | Shared state: node status, a coalesced log buffer, values parsed from the log (node ID, firmware, serial, bind address, region unset). `Settings` holds the persisted switches. |
+| `mesh/MeshLink.kt` | The transport interface and its domain types. Nothing above it sees a protobuf. |
+| `mesh/MeshtasticTcpLink.kt` | MeshLink over meshtasticd's TCP API: framing, the want_config handshake, heartbeats, reconnect. |
+| `mesh/StreamFrames.kt` | The 0x94 0xc3 length-prefixed framing, with resync. |
+| `mesh/MeshLinkHolder.kt` | Process-wide owner of the link and a capped event history for the Mesh tab. |
+| `PhoneSensors.kt` | Runtime probe of the phone's environment sensors, and one-shot reads. |
+| `EnvironmentReporter.kt` | Publishes pressure and light over the mesh link on an interval. |
 | `BatteryReporter.kt` | Publishes the phone's battery percentage, voltage and charging state to the file the daemon reads. |
 | `NodeFiles.kt` | Paths, `config.yaml` read and write, the `Lora.Region` key, presets, backup and restore zips, log export, identity reset. All of it blocking, all of it called from a background dispatcher. |
 | `ui/App.kt` | Theme and the three-tab scaffold. |
@@ -183,6 +203,39 @@ Process model: the daemon is a separate OS process, so a crash inside it
 cannot take the app down, and the app can restart it. The service runs in the
 app's process. The daemon's stdout is read on a dedicated thread and appended
 to `DaemonState.log`; the Logs tab observes that flow.
+
+## The mesh link
+
+`MeshLink` is an interface over a connection to the node, expressed in text messages and
+node sightings rather than in protobuf types. `MeshtasticTcpLink` implements it against
+meshtasticd's TCP API, which is the same interface the Meshtastic app uses: connect to
+127.0.0.1:4403, send a `want_config_id` nonce, read the config dump until
+`config_complete_id` returns that nonce, then stay on the stream with a heartbeat every
+five minutes.
+
+The interface exists because at least two other implementations are planned. A MeshCore
+link speaks a different wire format entirely. A multiplexing proxy would hold the daemon's
+single client slot and fan the stream out to several local clients, so that the phone app
+and this link could both be connected; that is the piece that would let the BBS run
+without displacing the Meshtastic app. Neither should be visible above `MeshLink`, so the
+BBS and the phone sensor telemetry are written against the interface only.
+
+Until the proxy exists, connecting takes the daemon's only client slot and the Meshtastic
+app is disconnected for the duration. The Mesh tab says so, and the link is off by default.
+
+Protobuf definitions are vendored under `app/src/main/proto` at a pinned commit and
+compiled by the Gradle protobuf plugin with the javalite runtime. The pin matters for the
+same reason the firmware pin does: the wire format the daemon speaks comes from the
+firmware's copy of those files, so the two are bumped together.
+
+### Two routes for telemetry
+
+Battery goes through firmware patch 0005 and a file, because the app had no way to talk to
+the node when it was written. Environment telemetry goes over the mesh link instead: the app
+builds the same Telemetry packet a sensor-equipped node would send. The second route costs
+nothing on a firmware bump and lets the published field set be a runtime decision, which
+suits hardware that varies as much as phone sensors do. The trade is that it only works
+while the link holds the daemon's client slot.
 
 ## Lifecycle
 

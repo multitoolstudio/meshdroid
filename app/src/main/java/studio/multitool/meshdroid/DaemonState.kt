@@ -180,4 +180,16 @@ object Settings {
 
     fun batteryReport(ctx: Context) = prefs(ctx).getBoolean("battery", true)
     fun setBatteryReport(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("battery", v).apply()
+
+    // Phone sensor telemetry. Off by default: it costs airtime on a shared channel, and it
+    // only publishes while the mesh link is connected.
+    fun envPressure(ctx: Context) = prefs(ctx).getBoolean("env_pressure", false)
+    fun setEnvPressure(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("env_pressure", v).apply()
+
+    fun envLux(ctx: Context) = prefs(ctx).getBoolean("env_lux", false)
+    fun setEnvLux(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("env_lux", v).apply()
+
+    /** Minutes between publications. Matches the firmware's own default cadence. */
+    fun envIntervalMinutes(ctx: Context) = prefs(ctx).getInt("env_interval", 30)
+    fun setEnvIntervalMinutes(ctx: Context, v: Int) = prefs(ctx).edit().putInt("env_interval", v).apply()
 }

@@ -208,7 +208,7 @@ a phone and record the hash in `CHANGELOG.md`.
 
 The script copies the Android env, variant and compat headers into the
 firmware checkout, installs the firmware's PlatformIO packages, applies the
-five patches (see [ARCHITECTURE.md](ARCHITECTURE.md)), exports the NDK
+six patches (see [ARCHITECTURE.md](ARCHITECTURE.md)), exports the NDK
 toolchain through the `TARGET_*` variables, runs `pio run -e android-arm64`,
 checks that the finished binary carries the strings the app parses, and strips
 the result into `app/src/main/jniLibs/arm64-v8a/libmeshtasticd.so` next to the
@@ -256,6 +256,29 @@ files; a test daemon left running keeps port 4403 and blocks the app:
 adb shell pkill -f /data/local/tmp/mtd
 adb shell rm -rf /data/local/tmp/mtd /data/local/tmp/fs /data/local/tmp/libc++_shared.so
 ```
+
+## Protocol buffers
+
+`app/src/main/proto` holds the Meshtastic `.proto` files, vendored unmodified from
+[meshtastic/protobufs](https://github.com/meshtastic/protobufs) at commit
+`ca2cb1a80fb7ef0e181a67877f71e37885f914cd`. The Gradle protobuf plugin compiles them
+into `org.meshtastic.proto.*` during the build; nothing generated is checked in.
+
+The plugin downloads a `protoc` binary from Maven, so the first app build needs network
+access beyond the usual Gradle dependencies.
+
+`app/src/main/protoinclude` holds two files that are imported but never compiled:
+`nanopb.proto`, whose options every Meshtastic proto carries, and
+`google/protobuf/descriptor.proto`, which nanopb.proto extends. They are on protoc's
+include path through `addIncludeDir` rather than in the compiled source set, because
+generating Java for nanopb's option extensions would need `DescriptorProtos`, which the
+javalite runtime does not ship. protoc from Maven does not bundle the well-known types,
+and the javalite artifact does not carry them as `.proto` files either, so descriptor.proto
+is vendored at the tag matching `protobufVersion`.
+
+Bump the vendored protos and the firmware commit together. The daemon's wire format comes
+from the firmware's own copy of these files, and a mismatched pair shows up as a field
+that silently stops decoding rather than as a build error.
 
 ## Build the app
 
@@ -332,6 +355,10 @@ Recorded here because each one cost a build cycle.
 - **`Process.destroy()` on Android is SIGKILL**, which is where exit code 137
   comes from, and portduino installs no signal handlers of its own. Patch 0004
   adds a SIGTERM handler so that a stop can flush the node database first.
+- **A battery level is discarded while charging.** `DeviceTelemetry.cpp` overwrites
+  it with the 101 that clients show as PWR. Patch 0006 keeps the real level on
+  portduino, which is the difference between a phone node showing 63% and showing
+  PWR on a powered hub.
 - **A percentage-only battery source shuts the daemon down.** `readPowerStatus()`
   deep sleeps the node after ten voltage readings below the OCV floor, and zero is
   below it. Patch 0005 substitutes a mid-charge voltage when the host does not

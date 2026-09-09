@@ -114,6 +114,21 @@ uMesh (SX1262 and SX1268), RAK19714. **Import** and **Export** work with any
 YAML from a Linux install. Changes apply after a restart; **Save & restart**
 does both.
 
+### Mesh
+
+A direct connection to the node, the same one the Meshtastic app makes. **Connect** shows
+what the node is hearing as it arrives: text messages, node sightings and other traffic,
+with a box to broadcast a message.
+
+**Phone sensors** lists the environment sensors this phone has, with a live reading for
+each. Barometric pressure and ambient light can be published to the mesh as environment
+telemetry, off by default, sent every 30 minutes while the link is connected.
+
+meshtasticd accepts one client, so while this is connected the Meshtastic app cannot be.
+Disconnect to hand the slot back. This tab is the foundation for the BBS: the link it uses
+is an interface, so the same code will work through a multiplexer later, and against
+MeshCore after that.
+
 ### Logs
 
 The live daemon log. **Export** writes it to a file through the file picker,
@@ -163,7 +178,7 @@ Linux install's files can be zipped up the same way and restored on the phone.
 | Status stays *Starting* | After 30 seconds Meshdroid says so and points at the Logs tab. Usually the pinmap in the Config tab does not match the dongle, or the radio is not answering on SPI. |
 | Laptop cannot reach the node over Wi-Fi | Intended when *Allow LAN access* is off. Turn it on and restart the node. Check you are using the phone's IP, not another node's. |
 | Log warns that the daemon never reported its bind address | The bundled daemon was built without firmware patch 0002, so it listens on every interface whatever the LAN switch says. Rebuild with `firmware/build-meshtasticd-android.sh`. |
-| Other nodes show this node as powered, not on battery | Battery reporting is off in the Node tab, or the daemon predates firmware patch 0005. Turn it on and restart, or rebuild the daemon. |
+| Other nodes show this node as powered, not on battery | Battery reporting is off in the Node tab, or the daemon predates firmware patches 0005 and 0006. Turn it on and restart, or rebuild the daemon. |
 
 ## Building from source
 

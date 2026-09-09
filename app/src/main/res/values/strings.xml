@@ -21,7 +21,29 @@
     <!-- Tabs -->
     <string name="tab_node">Node</string>
     <string name="tab_config">Config</string>
+    <string name="tab_mesh">Mesh</string>
     <string name="tab_logs">Logs</string>
+
+    <!-- Mesh tab -->
+    <string name="link_disconnected">Link disconnected</string>
+    <string name="link_connecting">Connecting…</string>
+    <string name="link_syncing">Reading node config…</string>
+    <string name="link_connected">Link connected</string>
+    <string name="link_error">Link error</string>
+    <string name="link_explain">Connects to the node the way the Meshtastic app does. The daemon accepts one client, so connecting here disconnects that app.</string>
+    <string name="link_takes_slot">Holding the node\'s single client slot. The Meshtastic app cannot connect until you disconnect.</string>
+    <string name="link_needs_node">Start the node first.</string>
+    <string name="link_self">This node  %1$s</string>
+    <string name="btn_connect">Connect</string>
+    <string name="btn_disconnect">Disconnect</string>
+    <string name="btn_send">Send</string>
+    <string name="label_broadcast">Broadcast on channel 0</string>
+    <string name="snack_send_failed">Could not send: %1$s</string>
+    <string name="sensors_title">Phone sensors</string>
+    <string name="sensors_none">This phone has no sensors the mesh can carry.</string>
+    <string name="sensors_unused">no mesh field</string>
+    <string name="sensors_last">Last published at %1$s</string>
+    <string name="sensors_pending">Published every %1$d minutes while the link is connected.</string>
 
     <!-- Node screen -->
     <string name="label_node_id">Node ID  %1$s</string>

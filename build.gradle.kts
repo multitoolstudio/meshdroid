@@ -2,4 +2,6 @@ plugins {
     id("com.android.application") version "8.7.3" apply false
     id("org.jetbrains.kotlin.android") version "2.1.0" apply false
     id("org.jetbrains.kotlin.plugin.compose") version "2.1.0" apply false
+    // Compiles the vendored Meshtastic .proto files. See app/src/main/proto/README.md.
+    id("com.google.protobuf") version "0.9.4" apply false
 }

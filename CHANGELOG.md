@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.2.1
+
+- Phone sensor telemetry. The Mesh tab lists the environment sensors this phone actually
+  has, with a live reading and the vendor name for each, and publishes barometric pressure
+  and ambient light to the mesh as environment telemetry. Off by default.
+- The sensors are probed at runtime rather than assumed. A barometer is common, an ambient
+  light sensor close to universal, and ambient temperature and humidity are absent from
+  almost every phone made in the last decade.
+- Publishing goes over the mesh link, not through a firmware patch, so it costs nothing on
+  a firmware bump. It only happens while the link is connected, which for now means while
+  the Meshtastic app is displaced. The multiplexing proxy removes that constraint.
+- `BatteryReporter` serialises its writes. The broadcast receiver and the heartbeat thread
+  shared one temporary file name, so whichever renamed first left the other with none.
+- A packet that fails to decode no longer ends the mesh session, and a clean close by the
+  daemon is logged. A null read is what being displaced by another client looks like, and
+  it previously logged nothing at all.
+
+## 1.2.0
+
+The mesh link. Groundwork for the BBS, and useful on its own.
+
+- New **Mesh** tab: connect to the node, watch text messages, node sightings and other
+  traffic as they arrive, and broadcast a message.
+- `MeshLink` is a transport interface expressed in domain types, with
+  `MeshtasticTcpLink` as the first implementation. The BBS, phone sensor telemetry and
+  an eventual MeshCore mode all sit on the interface rather than on protobuf types.
+- Meshtastic protobuf definitions are vendored at a pinned commit and compiled with the
+  javalite runtime by the Gradle protobuf plugin.
+- Framing, the want_config handshake, heartbeats and reconnect with backoff are handled
+  by the link. It disconnects itself when the node stops.
+
+meshtasticd still accepts one client, so connecting displaces the Meshtastic app. The
+multiplexing proxy that removes that limit is a later 1.2.x release, and it is a second
+implementation of `MeshLink` rather than a change to anything above it.
+
+## 1.1.1
+
+- The node keeps reporting its battery level while the phone charges. Firmware
+  patch 0006 removes the upstream rule that replaces the level with the 101 that
+  clients display as PWR whenever a node is charging. That rule suits a board whose
+  battery backs up its USB supply; on a phone it discards the only reading anyone
+  wants, and a node on a powered hub showed PWR with 1.1.0.
+
 ## 1.1.0
 
 Phone battery telemetry. Built against meshtastic/firmware 2.8.1, commit `fdb6730`.
