@@ -29,8 +29,8 @@ android {
         applicationId = "studio.multitool.meshdroid"
         minSdk = 28
         targetSdk = 35
-        versionCode = 11
-        versionName = "1.2.6"
+        versionCode = 12
+        versionName = "1.2.7"
         ndk { abiFilters += listOf("arm64-v8a") }
 
         // Shown at the bottom of the Node tab. The commit is the one pinned in

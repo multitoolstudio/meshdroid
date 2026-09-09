@@ -181,8 +181,11 @@ class MailModule : BbsModule {
         // stored as the node number instead, so the mail still finds them if they rename.
         val address = Sanitize.address(rawTo)
         if (address.isBlank()) return "Who to? mail <name or !nodeid> <text>"
-        val canonical = if (Sanitize.isNodeAddress(address)) address
-            else request.resolve(address)?.toString() ?: address
+        // A node number, or a name this node can tie to one, addresses a specific node and
+        // only that node can collect it. A name nobody here recognises is held under the
+        // name itself, which anyone claiming that name could collect, so the sender is told.
+        val resolved = if (Sanitize.isNodeAddress(address)) address else request.resolve(address)?.toString()
+        val canonical = resolved ?: address
 
         val sender = Sanitize.line(request.who(), 32)
         if (request.store.pendingMailFrom(sender) >= BbsStore.MAX_PENDING_MAIL_PER_SENDER) {
@@ -191,7 +194,8 @@ class MailModule : BbsModule {
         if (request.store.pendingMailCount() >= BbsStore.MAX_PENDING_MAIL) return "The mailbox is full."
 
         request.store.sendMail(sender, canonical, body)
-        return "Held for $rawTo. They get it when they next check."
+        return if (resolved != null) "Held for $rawTo. They get it when they next check."
+        else "Held for $rawTo, a name this node does not know. Use their node id to be sure it reaches them."
     }
 
     /**

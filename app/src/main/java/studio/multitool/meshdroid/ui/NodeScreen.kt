@@ -198,8 +198,11 @@ fun NodeScreen(
             }
         }
 
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(vertical = 8.dp)) {
+        SettingsSection(
+            title = stringResource(R.string.section_radio),
+            summary = stringResource(R.string.section_radio_summary, region ?: stringResource(R.string.region_none)),
+            initiallyExpanded = region == null
+        ) {
                 ListItem(
                     headlineContent = { Text(stringResource(R.string.item_region)) },
                     supportingContent = {
@@ -216,7 +219,15 @@ fun NodeScreen(
                         }
                     }
                 )
-                HorizontalDivider()
+        }
+
+        SettingsSection(
+            title = stringResource(R.string.section_connections),
+            summary = stringResource(
+                if (proxy) R.string.section_connections_shared else R.string.section_connections_single,
+                Settings.API_PORT
+            )
+        ) {
                 ListItem(
                     headlineContent = { Text(stringResource(R.string.item_connection)) },
                     supportingContent = { Text(stringResource(R.string.item_connection_detail, Settings.API_PORT)) }
@@ -249,7 +260,14 @@ fun NodeScreen(
                         })
                     }
                 )
-                HorizontalDivider()
+        }
+
+        SettingsSection(
+            title = stringResource(R.string.section_phone),
+            summary = stringResource(
+                if (batteryReport) R.string.section_phone_on else R.string.section_phone_off
+            )
+        ) {
                 ListItem(
                     headlineContent = { Text(stringResource(R.string.item_battery)) },
                     supportingContent = {
@@ -286,7 +304,6 @@ fun NodeScreen(
                         })
                     }
                 )
-            }
         }
 
         Card(Modifier.fillMaxWidth()) {

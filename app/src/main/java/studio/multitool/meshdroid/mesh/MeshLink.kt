@@ -24,15 +24,19 @@ interface MeshLink {
     fun start()
     fun stop()
 
-    /** Sends a text message. A null destination broadcasts on the given channel. */
-    suspend fun sendText(text: String, to: NodeId? = null, channel: Int = 0)
+    /**
+     * Sends a text message and returns the packet id it was given, which a caller can match
+     * against a later [MeshEvent.Ack]. A null destination broadcasts on the given channel;
+     * broadcasts are not acknowledged, so only direct messages produce an Ack.
+     */
+    suspend fun sendText(text: String, to: NodeId? = null, channel: Int = 0): Int
 
     /**
      * Publishes environment telemetry measured by the host rather than by the radio.
      * Every argument is optional; only the ones supplied are sent.
      */
     suspend fun sendEnvironment(pressureHpa: Float? = null, lux: Float? = null,
-                                temperatureC: Float? = null, relativeHumidity: Float? = null)
+                                temperatureC: Float? = null, relativeHumidity: Float? = null): Int
 }
 
 /** A node number. Meshtastic writes these as `!a1b2c3d4`. */
@@ -78,6 +82,14 @@ sealed interface MeshEvent {
 
     /** Anything else that arrived on the stream, kept so activity stays visible. */
     data class Other(val from: NodeId?, val portName: String, val bytes: Int) : MeshEvent
+
+    /**
+     * The mesh's answer to a direct message that asked for acknowledgement.
+     *
+     * [delivered] true means the packet reached the destination node, which is as much as a
+     * radio protocol can tell anyone. It says nothing about a person having read it.
+     */
+    data class Ack(val packetId: Int, val delivered: Boolean, val reason: String?) : MeshEvent
 
     data class StatusChanged(val status: LinkStatus, val detail: String? = null) : MeshEvent
 }

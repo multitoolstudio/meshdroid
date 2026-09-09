@@ -271,6 +271,19 @@ The engine holds its own connection rather than sharing the Mesh tab's, so a BBS
 depend on a screen being open. That is one more proxy client, which costs nothing while
 sharing is on and takes the node's only slot when it is off.
 
+### Knowing a reply arrived
+
+Direct messages already went out with `want_ack` set, and the mesh answers them with a
+Routing packet whose `request_id` is the id of the message being acknowledged. The link
+decodes those into `MeshEvent.Ack`, and `sendText` returns the id it used so a caller can
+match them up.
+
+The BBS uses this for mail: a message is marked collected only once the reply carrying it
+has been confirmed, so a reply lost in the air leaves the mail waiting rather than losing
+it. Acks land in a map filled by the event loop rather than being awaited on the flow,
+because a reply can be acknowledged before a collector started at send time would have
+subscribed.
+
 ### Trusting what arrives
 
 Commands come from strangers. Nothing interprets them, and every query is parameterised, so

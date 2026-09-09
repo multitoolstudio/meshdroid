@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.2.7
+
+Delivery confirmation, and a tidier Node tab.
+
+- The mesh link decodes the acknowledgements it was already asking for. `sendText` returns
+  the packet id it used, and a Routing reply carrying that id becomes a `MeshEvent.Ack`
+  saying whether the packet reached the far node and, when it did not, why.
+- Collected mail is marked read only after the mesh confirms delivery. A reply that is sent
+  and then lost leaves the mail waiting, so it is offered again next time. An ack means the
+  packet arrived at the destination node, not that anyone read it, which is the right bar
+  for mail.
+- The BBS activity log marks each reply as delivered, no ack, or not sent.
+- Mail addressed to a name this node cannot tie to a node number now says so, and suggests
+  the node id. Mail addressed to a node id, or to a name the node recognises, goes to that
+  node alone.
+- The Node tab groups its settings into Radio, Connections and Phone, each opening and
+  closing, with a summary line that answers the common question without a tap. Radio starts
+  open while no region is set.
+
 ## 1.2.6
 
 BBS fixes from use, and a split of its screen.

@@ -102,6 +102,18 @@
     <string name="btn_stop">Stop</string>
     <string name="btn_restart">Restart</string>
 
+    <string name="section_expand">Show</string>
+    <string name="section_collapse">Hide</string>
+    <string name="section_radio">Radio</string>
+    <string name="section_radio_summary">Region %1$s</string>
+    <string name="region_none">not set</string>
+    <string name="section_connections">Connections</string>
+    <string name="section_connections_shared">Port %1$d, shared between apps</string>
+    <string name="section_connections_single">Port %1$d, one app at a time</string>
+    <string name="section_phone">Phone</string>
+    <string name="section_phone_on">Battery reported to the mesh</string>
+    <string name="section_phone_off">Battery not reported</string>
+
     <string name="item_region">LoRa region</string>
     <string name="item_region_unset">Not set. Required before the node can transmit.</string>
     <string name="item_region_set">%1$s. Seeds a new node; later changes from the Meshtastic app take precedence.</string>

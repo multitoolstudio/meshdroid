@@ -148,9 +148,18 @@ fun BbsScreen(onOpenSettings: () -> Unit) {
                                 fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 14.sp,
                                 color = Color(0xFF9CCC65))
                             e.reply?.let {
-                                Text("  -> $it", fontFamily = FontFamily.Monospace, fontSize = 11.sp,
+                                val mark = when {
+                                    !e.sent -> " [not sent]"
+                                    e.acked == true -> " [delivered]"
+                                    e.acked == false -> " [no ack]"
+                                    else -> ""
+                                }
+                                Text("  -> $it$mark", fontFamily = FontFamily.Monospace, fontSize = 11.sp,
                                     lineHeight = 14.sp,
-                                    color = if (e.sent) Color(0xFFDDDDDD) else Color(0xFFFFD180))
+                                    color = when {
+                                        !e.sent || e.acked == false -> Color(0xFFFFD180)
+                                        else -> Color(0xFFDDDDDD)
+                                    })
                             }
                         }
                     }

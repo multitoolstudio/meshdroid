@@ -32,7 +32,19 @@ import studio.multitool.meshdroid.mesh.NodeId
  */
 class BbsEngine(private val ctx: Context, private val link: MeshLink = MeshtasticTcpLink()) {
 
-    data class Entry(val at: Long, val from: String, val request: String, val reply: String?, val sent: Boolean)
+    /**
+     * One exchange as it appears in the activity log. [sent] means the reply left this node;
+     * [acked] is null when nothing was waiting on delivery, true when the mesh confirmed the
+     * packet reached the far node, and false when it never did.
+     */
+    data class Entry(
+        val at: Long,
+        val from: String,
+        val request: String,
+        val reply: String?,
+        val sent: Boolean,
+        val acked: Boolean? = null
+    )
 
     private val store = BbsStore(ctx)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -53,8 +65,12 @@ class BbsEngine(private val ctx: Context, private val link: MeshLink = Meshtasti
         val channel: Int,
         val text: String,
         val entry: Entry,
+        /** Run only once the mesh has confirmed every part reached the far node. */
         val onDelivered: (() -> Unit)? = null
     )
+
+    /** Delivery results by packet id, filled by the ack collector and read by the outbox. */
+    private val acks = java.util.concurrent.ConcurrentHashMap<Int, Boolean>()
 
     private val modules: MutableList<BbsModule> = mutableListOf()
 
@@ -98,6 +114,7 @@ class BbsEngine(private val ctx: Context, private val link: MeshLink = Meshtasti
                     val name = event.shortName ?: event.longName
                     if (name != null) names[event.id.value] = name
                 }
+                is MeshEvent.Ack -> acks[event.packetId] = event.delivered
                 is MeshEvent.Text -> if (event.from != link.selfNode.value) handleText(event)
                 else -> Unit
             }
@@ -190,15 +207,44 @@ class BbsEngine(private val ctx: Context, private val link: MeshLink = Meshtasti
         for (pending in outbox) {
             val parts = split(pending.text)
             var sentAll = true
+            val ids = mutableListOf<Int>()
             parts.forEachIndexed { i, part ->
                 runCatching { link.sendText(part, pending.to, pending.channel) }
+                    .onSuccess { ids += it }
                     .onFailure { sentAll = false; Log.w(TAG, "reply failed: ${it.message}") }
                 if (i < parts.lastIndex) delay(SEND_GAP_MS)
             }
-            if (sentAll) runCatching { pending.onDelivered?.invoke() }
-            record(pending.entry.copy(sent = sentAll))
+
+            // Anything that acts on delivery waits for the mesh to confirm it. A broadcast
+            // is never acknowledged, so only a direct reply can be confirmed at all.
+            var acked: Boolean? = null
+            if (pending.onDelivered != null && pending.to != null && sentAll) {
+                acked = ids.all { awaitAck(it) }
+                if (acked) runCatching { pending.onDelivered.invoke() }
+                else DaemonState.appendLog("[meshdroid] BBS reply to ${pending.to} was not acknowledged, keeping it for next time")
+            } else if (pending.onDelivered != null && sentAll) {
+                runCatching { pending.onDelivered.invoke() }
+            }
+
+            record(pending.entry.copy(sent = sentAll, acked = acked))
             delay(SEND_GAP_MS)
         }
+    }
+
+    /**
+     * Waits for the mesh's answer about one packet.
+     *
+     * Results are collected into a map by the event loop rather than awaited on the flow,
+     * because the acknowledgement can arrive before a collector started here would have
+     * subscribed. Polling a map for a few seconds is the version with no race in it.
+     */
+    private suspend fun awaitAck(packetId: Int): Boolean {
+        val deadline = System.currentTimeMillis() + ACK_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
+            acks.remove(packetId)?.let { return it }
+            delay(ACK_POLL_MS)
+        }
+        return false
     }
 
     /** Splits on whitespace so a reply never breaks mid-word, with a (n/m) marker. */
@@ -272,6 +318,13 @@ class BbsEngine(private val ctx: Context, private val link: MeshLink = Meshtasti
         private const val MARKER_ROOM = 8
         private const val MAX_PARTS = 4
         private const val SEND_GAP_MS = 4000L
+        /**
+         * How long to wait for a delivery report. The firmware retransmits an unacknowledged
+         * direct message several times before giving up, and each attempt costs airtime, so
+         * this has to outlast that rather than the first try.
+         */
+        private const val ACK_TIMEOUT_MS = 90_000L
+        private const val ACK_POLL_MS = 500L
         /** Longest command accepted. A text packet cannot carry more than about this. */
         private const val MAX_COMMAND = 240
     }

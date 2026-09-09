@@ -201,17 +201,37 @@ class MeshtasticTcpLink(
                 hopsAway = if (p.hopStart > 0) (p.hopStart - p.hopLimit).coerceAtLeast(0) else null,
                 pkiEncrypted = p.pkiEncrypted
             ))
+            // The mesh reports delivery through a Routing packet whose request_id is the id
+            // of the message being answered. error_reason NONE is an acknowledgement;
+            // anything else says why it did not get there.
+            Portnums.PortNum.ROUTING_APP -> {
+                if (data.requestId != 0) {
+                    val routing = runCatching { MeshProtos.Routing.parseFrom(data.payload) }.getOrNull()
+                    val reason = routing?.errorReason
+                    emit(MeshEvent.Ack(
+                        packetId = data.requestId,
+                        delivered = reason == null || reason == MeshProtos.Routing.Error.NONE,
+                        reason = reason?.takeIf { it != MeshProtos.Routing.Error.NONE }?.name
+                    ))
+                } else {
+                    emit(MeshEvent.Other(NodeId(p.from), data.portnum.name, data.payload.size()))
+                }
+            }
             else -> emit(MeshEvent.Other(NodeId(p.from), data.portnum.name, data.payload.size()))
         }
     }
 
-    override suspend fun sendText(text: String, to: NodeId?, channel: Int) {
+    override suspend fun sendText(text: String, to: NodeId?, channel: Int): Int {
         val body = text.toByteArray()
         require(body.size <= MAX_TEXT_BYTES) { "message is longer than $MAX_TEXT_BYTES bytes" }
+        // Positive ids only: the id travels as a fixed32 and is compared against the
+        // request_id in a Routing reply, where a negative Int would be read back as a large
+        // unsigned value and never match.
+        val id = Random.nextInt(1, Int.MAX_VALUE)
         val packet = MeshProtos.MeshPacket.newBuilder()
             .setTo((to ?: NodeId.BROADCAST).value)
             .setChannel(channel)
-            .setId(Random.nextInt())
+            .setId(id)
             .setWantAck(to != null)
             .setDecoded(
                 MeshProtos.Data.newBuilder()
@@ -220,10 +240,11 @@ class MeshtasticTcpLink(
             )
             .build()
         sendToRadio(MeshProtos.ToRadio.newBuilder().setPacket(packet).build())
+        return id
     }
 
     override suspend fun sendEnvironment(pressureHpa: Float?, lux: Float?,
-                                         temperatureC: Float?, relativeHumidity: Float?) {
+                                         temperatureC: Float?, relativeHumidity: Float?): Int {
         val env = TelemetryProtos.EnvironmentMetrics.newBuilder()
         pressureHpa?.let { env.setBarometricPressure(it) }
         lux?.let { env.setLux(it) }
@@ -233,9 +254,10 @@ class MeshtasticTcpLink(
             .setTime((System.currentTimeMillis() / 1000).toInt())
             .setEnvironmentMetrics(env)
             .build()
+        val id = Random.nextInt(1, Int.MAX_VALUE)
         val packet = MeshProtos.MeshPacket.newBuilder()
             .setTo(NodeId.BROADCAST.value)
-            .setId(Random.nextInt())
+            .setId(id)
             .setDecoded(
                 MeshProtos.Data.newBuilder()
                     .setPortnum(Portnums.PortNum.TELEMETRY_APP)
@@ -243,6 +265,7 @@ class MeshtasticTcpLink(
             )
             .build()
         sendToRadio(MeshProtos.ToRadio.newBuilder().setPacket(packet).build())
+        return id
     }
 
     private suspend fun sendToRadio(msg: MeshProtos.ToRadio) = writeLock.withLock {

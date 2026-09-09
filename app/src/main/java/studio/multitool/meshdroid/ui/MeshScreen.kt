@@ -261,6 +261,10 @@ private fun EventLine(e: MeshEvent) {
         is MeshEvent.NodeSeen -> Color(0xFF80CBC4) to
             "node ${e.id} ${e.longName ?: ""}" + (e.batteryLevel?.let { if (it > 100) " PWR" else " $it%" } ?: "")
         is MeshEvent.Other -> Color(0xFF9E9E9E) to "${e.from ?: ""} ${e.portName} ${e.bytes}B"
+        // Delivery reports for messages this node sent, including any the BBS sent.
+        is MeshEvent.Ack ->
+            (if (e.delivered) Color(0xFF80CBC4) else Color(0xFFFF8A80)) to
+                if (e.delivered) "ack for ${e.packetId}" else "no delivery for ${e.packetId}: ${e.reason ?: "unknown"}"
         is MeshEvent.StatusChanged -> Color(0xFFFFD180) to
             "link ${e.status.name.lowercase()}" + (e.detail?.let { ": $it" } ?: "")
     }
