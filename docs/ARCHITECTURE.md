@@ -60,7 +60,7 @@ instead of glibc.
 
 ## The patches
 
-All four are applied by `build-meshtasticd-android.sh` and are idempotent; the
+All five are applied by `build-meshtasticd-android.sh` and are idempotent; the
 script checks for a marker string before applying each one, and fails if a
 marker is still missing afterwards. 0004 appends to the function 0003 adds, so
 they are applied in order.
@@ -140,6 +140,30 @@ unimplemented `Print` path is reached, and that has to stay a visible crash.
 what `Process.destroy()` does on Android. Without this patch that wait accomplishes
 nothing: an unhandled SIGTERM is as abrupt as a kill.
 
+### 0005: firmware, battery level from a host file
+
+Target: `src/Power.cpp` in the firmware checkout.
+
+`Power.cpp` already abstracts the battery behind `HasBatteryLevel`, and
+`Power::setup()` picks an implementation from a chain of probes. The patch adds a
+portduino-only implementation that reads a file named in `MESHTASTICD_BATTERY_FILE`,
+and puts it at the head of that chain. With no such variable the chain is unchanged.
+
+The file holds one line of key=value pairs, written by `BatteryReporter` in the app:
+
+```
+pct=87 mv=3980 charging=1 powered=1 ts=1757390000
+```
+
+Two details carry weight. The `ts` field is a freshness check: anything older than
+three minutes reads as no battery, so a stopped or crashed app degrades to the USB
+powered state this build reported before rather than leaving a frozen percentage on
+the mesh. And a zero or out-of-range voltage is replaced with a mid-charge value,
+because `readPowerStatus()` compares the voltage against the OCV floor and triggers
+a low battery deep sleep after ten readings below it. A percentage-only source that
+passed zero through would shut the daemon down about a minute after the phone came
+off the charger.
+
 ## The app
 
 Kotlin, Jetpack Compose, Material 3. One module, no dependency injection.
@@ -150,6 +174,7 @@ Kotlin, Jetpack Compose, Material 3. One module, no dependency injection.
 | `DaemonService.kt` | Foreground service that owns the daemon process: opens USB, holds a wake lock, starts the fd socket, launches the binary, streams its stdout, tears down cleanly. Signals orphaned daemons from a crashed earlier run and waits for port 4403 before starting. Every transition runs on its own control thread. |
 | `UsbFdServer.kt` | The abstract Unix socket that hands the USB descriptor to the daemon, after checking that the peer is this app. |
 | `DaemonState.kt` | Shared state: node status, a coalesced log buffer, values parsed from the log (node ID, firmware, serial, bind address, region unset). `Settings` holds the persisted switches. |
+| `BatteryReporter.kt` | Publishes the phone's battery percentage, voltage and charging state to the file the daemon reads. |
 | `NodeFiles.kt` | Paths, `config.yaml` read and write, the `Lora.Region` key, presets, backup and restore zips, log export, identity reset. All of it blocking, all of it called from a background dispatcher. |
 | `ui/App.kt` | Theme and the three-tab scaffold. |
 | `ui/NodeScreen.kt`, `ui/ConfigScreen.kt`, `ui/LogsScreen.kt` | The tabs. |
@@ -196,7 +221,8 @@ the radio's host and a start needs a USB device the user has plugged in, so
     prefs/config.proto           radio and security config, including the keypair
     prefs/nodes.proto            node database
     prefs/channels.proto, device.proto, module.proto, ...
-  shared_prefs/meshdroid.xml     app switches: lan, verbose, autostart
+  files/battery                  phone battery state for firmware patch 0005
+  shared_prefs/meshdroid.xml     app switches: lan, verbose, autostart, battery
 ```
 
 The daemon is launched as

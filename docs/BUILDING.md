@@ -120,6 +120,15 @@ source ~/.bashrc
 echo "$ANDROID_NDK_HOME"     # must print a real directory
 ```
 
+Gradle needs a JDK 17 or 21. A distribution that defaults to a newer JDK fails with
+a bare version number for "What went wrong", because the Android Gradle Plugin does
+not recognise it. Android Studio uses its own bundled runtime and is unaffected.
+Point the command line at a JDK that has `bin/javac`:
+
+```bash
+echo "org.gradle.java.home=/usr/lib/jvm/java-17-temurin-jdk" >> ~/.gradle/gradle.properties
+```
+
 Meshdroid was built with NDK r30 (clang 21). NDK r27 or newer should work;
 older NDKs ship a libc++ that behaves differently and have not been tried.
 
@@ -199,7 +208,7 @@ a phone and record the hash in `CHANGELOG.md`.
 
 The script copies the Android env, variant and compat headers into the
 firmware checkout, installs the firmware's PlatformIO packages, applies the
-four patches (see [ARCHITECTURE.md](ARCHITECTURE.md)), exports the NDK
+five patches (see [ARCHITECTURE.md](ARCHITECTURE.md)), exports the NDK
 toolchain through the `TARGET_*` variables, runs `pio run -e android-arm64`,
 checks that the finished binary carries the strings the app parses, and strips
 the result into `app/src/main/jniLibs/arm64-v8a/libmeshtasticd.so` next to the
@@ -323,6 +332,10 @@ Recorded here because each one cost a build cycle.
 - **`Process.destroy()` on Android is SIGKILL**, which is where exit code 137
   comes from, and portduino installs no signal handlers of its own. Patch 0004
   adds a SIGTERM handler so that a stop can flush the node database first.
+- **A percentage-only battery source shuts the daemon down.** `readPowerStatus()`
+  deep sleeps the node after ten voltage readings below the OCV floor, and zero is
+  below it. Patch 0005 substitutes a mid-charge voltage when the host does not
+  supply one.
 - **`pio pkg update` reverts patch 0002.** It lives in the package cache, not in
   the firmware tree. The build script checks for it and refuses to build without
   it.

@@ -57,6 +57,7 @@ class DaemonService : Service() {
     private var fdServer: UsbFdServer? = null
     private var process: Process? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var battery: BatteryReporter? = null
 
     /** True while a stop or restart is tearing the daemon down, so its exit is not an error. */
     @Volatile private var teardown = false
@@ -184,12 +185,19 @@ class DaemonService : Service() {
         if (Settings.verbose(this)) args += "-v"
 
         val lan = Settings.lanEnabled(this)
+        val reportBattery = Settings.batteryReport(this)
+        val batteryFile = BatteryReporter.fileFor(this)
+        // Removed rather than left behind: a stale file from a session that had reporting
+        // on would otherwise be read by this one until it aged out.
+        if (!reportBattery) runCatching { batteryFile.delete() }
+
         val pb = ProcessBuilder(args).redirectErrorStream(true).directory(filesDir)
         pb.environment().apply {
             put("PINEDIO_USB_FD_SOCKET", socketName)
             put("HOME", filesDir.absolutePath)
             put("LD_LIBRARY_PATH", applicationInfo.nativeLibraryDir)   // libc++_shared.so is packaged beside the binary
             put("MESHTASTICD_BIND_ADDR", if (lan) "0.0.0.0" else "127.0.0.1")
+            if (reportBattery) put("MESHTASTICD_BATTERY_FILE", batteryFile.absolutePath)
         }
         DaemonState.appendLog("[meshdroid] starting meshtasticd, API ${if (lan) "on LAN + localhost" else "localhost only"}:${Settings.API_PORT}")
 
@@ -198,6 +206,9 @@ class DaemonService : Service() {
         }
         process = p
         daemonUp = true
+        // Started after the daemon so the first reading lands while it is still booting,
+        // which is well inside the daemon's staleness window.
+        if (reportBattery) battery = BatteryReporter(this, batteryFile).also { it.start() }
         readStdout(p)
         startWatchdog(lan)
     }
@@ -258,6 +269,7 @@ class DaemonService : Service() {
         watchdog?.cancel(); watchdog = null
         if (process != null && DaemonState.status.value != NodeStatus.ERROR)
             DaemonState.setStatus(NodeStatus.STOPPING, "Stopping node…")
+        runCatching { battery?.stop() }; battery = null
         stopDaemonProcess()
         runCatching { fdServer?.stop() }; fdServer = null
         // Closed after the fd server, so nothing can send a descriptor that has

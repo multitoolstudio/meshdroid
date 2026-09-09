@@ -70,7 +70,13 @@ object DaemonState {
     private val _regionUnset = MutableStateFlow(false)
     val regionUnset: StateFlow<Boolean> = _regionUnset
 
+    /** Last phone battery reading published to the daemon, or null when reporting is off. */
+    private val _battery = MutableStateFlow<BatteryReporter.Reading?>(null)
+    val battery: StateFlow<BatteryReporter.Reading?> = _battery
+
     fun setServiceAlive(alive: Boolean) { _serviceAlive.value = alive }
+
+    fun setBattery(r: BatteryReporter.Reading?) { _battery.value = r }
 
     fun setStatus(s: NodeStatus, detail: String? = null) {
         _status.value = s
@@ -171,4 +177,7 @@ object Settings {
 
     fun autoStart(ctx: Context) = prefs(ctx).getBoolean("autostart", true)
     fun setAutoStart(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("autostart", v).apply()
+
+    fun batteryReport(ctx: Context) = prefs(ctx).getBoolean("battery", true)
+    fun setBatteryReport(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("battery", v).apply()
 }

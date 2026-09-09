@@ -48,6 +48,13 @@
 
     <string name="item_autostart">Start when radio is plugged in</string>
 
+    <string name="item_battery">Report phone battery to the mesh</string>
+    <string name="item_battery_off">The node reports itself as USB powered, like meshtasticd on a Linux box.</string>
+    <string name="item_battery_on">Other nodes see this node\'s charge level. Applies on the next start.</string>
+    <string name="item_battery_now">Reporting %1$d%%%2$s</string>
+    <string name="battery_charging">, charging</string>
+    <string name="battery_plugged">, plugged in</string>
+
     <string name="item_files">Node files</string>
     <string name="item_files_detail">config.yaml plus the node database, keys and channels (prefs/).</string>
     <string name="btn_backup">Back up</string>

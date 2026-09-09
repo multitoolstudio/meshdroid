@@ -1,0 +1,152 @@
+diff --git a/src/Power.cpp b/src/Power.cpp
+index 1a2b3c4..5d6e7f8 100644
+--- a/src/Power.cpp
++++ b/src/Power.cpp
+@@ -310,8 +310,134 @@
+ /**
+  * If this board has a battery level sensor, set this to a valid implementation
+  */
+ static HasBatteryLevel *batteryLevel; // Default to NULL for no battery level sensor
+ 
++#if defined(ARCH_PORTDUINO) && !defined(ARCH_PORTDUINO_WASM)
++#include <ctime>
++
++// Battery state supplied by the host through a file named in MESHTASTICD_BATTERY_FILE.
++// Meshdroid writes the Android phone's battery there, so a phone-hosted node reports the
++// phone's charge to the mesh instead of appearing permanently USB powered.
++//
++// One line of key=value pairs, in any order:
++//   pct=87 mv=3980 charging=1 powered=1 ts=1757390000
++//
++// ts is seconds since the epoch. A file that is missing, unparseable, or older than
++// PORTDUINO_BATTERY_MAX_AGE_S counts as no battery, which is what this build reported
++// before the file existed, so a host that stops writing degrades to USB powered rather
++// than publishing a frozen percentage to the mesh.
++//
++// A zero voltage never reaches readPowerStatus(). Its low voltage check compares
++// getBattVoltage() against the OCV floor and deep sleeps the node after ten readings
++// below it, so a host that knows only the percentage would otherwise shut the daemon
++// down about a minute after it stopped charging.
++#define PORTDUINO_BATTERY_MAX_AGE_S 180
++#define PORTDUINO_BATTERY_CACHE_MS 2000
++#define PORTDUINO_BATTERY_ASSUMED_MV 3800
++
++class PortduinoFileBatteryLevel : public HasBatteryLevel
++{
++  public:
++    virtual int getBatteryPercent() override
++    {
++        refresh();
++        return valid ? percent : -1;
++    }
++    virtual uint16_t getBattVoltage() override
++    {
++        refresh();
++        return valid ? millivolts : 0;
++    }
++    virtual bool isBatteryConnect() override
++    {
++        refresh();
++        return valid;
++    }
++    virtual bool isVbusIn() override
++    {
++        refresh();
++        return valid ? powered : false;
++    }
++    virtual bool isCharging() override
++    {
++        refresh();
++        return valid ? charging : false;
++    }
++
++  private:
++    // readPowerStatus() calls all five accessors per cycle; parse at most once every
++    // PORTDUINO_BATTERY_CACHE_MS so a cycle costs one open and one read.
++    void refresh()
++    {
++        uint32_t now = millis();
++        if (lastReadMs != 0 && (now - lastReadMs) < PORTDUINO_BATTERY_CACHE_MS)
++            return;
++        lastReadMs = now;
++        valid = false;
++
++        const char *path = getenv("MESHTASTICD_BATTERY_FILE");
++        if (!path || !*path)
++            return;
++        FILE *f = fopen(path, "r");
++        if (!f)
++            return;
++        char line[128] = {0};
++        char *got = fgets(line, sizeof(line), f);
++        fclose(f);
++        if (!got)
++            return;
++
++        int pct = -1, mv = 0, chg = 0, pwr = -1;
++        long stamp = 0;
++        for (char *tok = strtok(line, " \t\r\n"); tok != NULL; tok = strtok(NULL, " \t\r\n")) {
++            if (sscanf(tok, "pct=%d", &pct) == 1)
++                continue;
++            if (sscanf(tok, "mv=%d", &mv) == 1)
++                continue;
++            if (sscanf(tok, "charging=%d", &chg) == 1)
++                continue;
++            if (sscanf(tok, "powered=%d", &pwr) == 1)
++                continue;
++            sscanf(tok, "ts=%ld", &stamp);
++        }
++        if (pct < 0 || pct > 100)
++            return;
++        if (stamp <= 0 || (long)time(NULL) - stamp > PORTDUINO_BATTERY_MAX_AGE_S)
++            return;
++
++        percent = pct;
++        // Out of range or absent: assume a mid-charge single cell rather than report a
++        // voltage that would trip the low voltage shutdown.
++        millivolts = (mv >= 2500 && mv <= 5000) ? (uint16_t)mv : PORTDUINO_BATTERY_ASSUMED_MV;
++        charging = chg != 0;
++        powered = (pwr >= 0) ? (pwr != 0) : charging;
++        valid = true;
++    }
++
++    bool valid = false;
++    int percent = -1;
++    uint16_t millivolts = PORTDUINO_BATTERY_ASSUMED_MV;
++    bool charging = false;
++    bool powered = false;
++    uint32_t lastReadMs = 0;
++};
++
++static PortduinoFileBatteryLevel portduinoFileBattery;
++
++// Selected whenever the host names a battery file. Returns true without waiting for the
++// file to appear: the host may write it a moment after the daemon starts, and until it
++// does every accessor reports "no battery", which is the old behaviour.
++static bool portduinoFileBatteryInit()
++{
++    const char *path = getenv("MESHTASTICD_BATTERY_FILE");
++    if (!path || !*path)
++        return false;
++    LOG_INFO("Using host battery level from %s", path);
++    batteryLevel = &portduinoFileBattery;
++    return true;
++}
++#endif
++
+ #ifdef BATTERY_PIN
+ 
+ void battery_adcEnable()
+@@ -929,6 +1055,12 @@
+     initSGM41562(SGM41562_WIRE);
+ #endif
+     bool found = false;
++#if defined(ARCH_PORTDUINO) && !defined(ARCH_PORTDUINO_WASM)
++    // A host-supplied battery reading wins over anything probed on the board.
++    if (portduinoFileBatteryInit()) {
++        found = true;
++    } else
++#endif
+     if (axpChipInit()) {
+         found = true;
+     } else if (cw2015Init()) {

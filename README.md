@@ -33,7 +33,8 @@ Meshtastic LLC. "Meshtastic" is a registered trademark of Meshtastic LLC.
 - [Power, battery and limits](#power-battery-and-limits)
 - [Troubleshooting](#troubleshooting)
 - [Building from source](#building-from-source)
-- [Licence](#licence)
+- [License](#license)
+- [AI Disclosure](#ai-disclosure)
 
 ## Requirements
 
@@ -85,14 +86,25 @@ raising it.
   this phone can reach it. On: it listens on all interfaces and any device on
   the same Wi-Fi can connect to, read from and reconfigure the node. Takes
   effect on the next start.
+- **Report phone battery to the mesh.** On by default. The node publishes the
+  phone's charge level, and whether it is charging, the way a battery-powered
+  node does. Other nodes then see how long this one is likely to last. Off means
+  the node reports itself as USB powered, which is what `meshtasticd` does on a
+  Linux box. Applies on the next start.
 - **Start when radio is plugged in.** The USB auto-launch.
 - **Back up / Restore.** Moves `config.yaml` plus the node database, channels
   and keys as a zip through the system file picker: Downloads, Drive, a USB
-  stick, wherever. Restore stops the node first; start it again afterwards.
+  stick, wherever. The zip holds the node's private key in the clear, so put it
+  somewhere you would put a key. Restore asks first, then stops the node, waits
+  for it to exit, and replaces `config.yaml` and the whole `prefs/` tree with
+  what the backup contains. Start the node again afterwards.
 - **Reset identity.** Deletes the node database and keys. The node gets a new
   keypair on its next start. `config.yaml` is kept. Only available while the
   node is stopped.
 - **Close Meshdroid.** Stops the node and quits the app.
+
+The bottom of the tab shows the app version and the firmware commit the bundled
+daemon was built from.
 
 ### Config
 
@@ -117,6 +129,7 @@ app (Back up, Export) or through `adb` on debug builds:
 ```
 /data/data/studio.multitool.meshdroid/files/config.yaml          equivalent of /etc/meshtasticd/config.yaml
 /data/data/studio.multitool.meshdroid/files/meshtasticd/prefs/   equivalent of /var/lib/meshtasticd/
+/data/data/studio.multitool.meshdroid/files/battery              phone battery state, read by the daemon
 ```
 
 A backup zip contains exactly `config.yaml` and `prefs/`, in the layout
@@ -131,7 +144,8 @@ Linux install's files can be zipped up the same way and restored on the phone.
   powered OTG hub, which also charges the phone.
 - **Battery.** The USB-to-SPI bridge is polled continuously while the node
   runs. Expect a noticeable share of battery per hour. Stop releases the wake
-  lock.
+  lock. The node reports the phone's charge to the mesh, so other operators can
+  see it draining.
 - **One client at a time.** meshtasticd's TCP API accepts a single connection.
   Connecting the Python CLI disconnects the phone app and the other way round.
 - **No Bluetooth.** The phone app connects over TCP, not BLE, by design.
@@ -146,7 +160,10 @@ Linux install's files can be zipped up the same way and restored on the phone.
 | Meshtastic app connects, then hangs | Only one client can be attached. Close the Python CLI or any other client. |
 | Keys blank in the Meshtastic app, `/prefs/config.proto does not exist` in the log | The LoRa region is unset. Set it in the Node tab. |
 | Node restarts on its own | USB power. Lower `SX126X_MAX_POWER` in the Config tab or use a powered hub. |
+| Status stays *Starting* | After 30 seconds Meshdroid says so and points at the Logs tab. Usually the pinmap in the Config tab does not match the dongle, or the radio is not answering on SPI. |
 | Laptop cannot reach the node over Wi-Fi | Intended when *Allow LAN access* is off. Turn it on and restart the node. Check you are using the phone's IP, not another node's. |
+| Log warns that the daemon never reported its bind address | The bundled daemon was built without firmware patch 0002, so it listens on every interface whatever the LAN switch says. Rebuild with `firmware/build-meshtasticd-android.sh`. |
+| Other nodes show this node as powered, not on battery | Battery reporting is off in the Node tab, or the daemon predates firmware patch 0005. Turn it on and restart, or rebuild the daemon. |
 
 ## Building from source
 
@@ -163,9 +180,12 @@ Public License, version 3 (see [LICENSE](LICENSE)).
 
 The daemon shipped in each release is built from
 [meshtastic/firmware](https://github.com/meshtastic/firmware) (GPL-3.0) with
-the patches in `firmware/`. Those patches and build scripts are the
-corresponding source for the binary.
+the patches in `firmware/`, at the commit pinned in
+`firmware/build-meshtasticd-android.sh`. Those patches and build scripts are
+the corresponding source for the binary.
 
+The APK also contains the NDK's `libc++_shared.so`, redistributed unmodified
+under the Apache 2.0 licence with LLVM exceptions.
 
 ## AI Disclosure
 

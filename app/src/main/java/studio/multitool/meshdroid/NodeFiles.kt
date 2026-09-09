@@ -62,7 +62,7 @@ object NodeFiles {
      * Writes through a temporary file in the same directory and renames it over the
      * target, so an interrupted write cannot leave a truncated config.yaml behind.
      */
-    private fun writeAtomically(target: File, bytes: ByteArray) {
+    fun writeAtomically(target: File, bytes: ByteArray) {
         target.parentFile?.mkdirs()
         val tmp = File(target.parentFile, target.name + ".tmp")
         FileOutputStream(tmp).use { out ->

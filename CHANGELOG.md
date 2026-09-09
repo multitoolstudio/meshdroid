@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.1.0
+
+Phone battery telemetry. Built against meshtastic/firmware 2.8.1, commit `fdb6730`.
+
+- The node reports the phone's battery percentage and charging state to the mesh
+  instead of appearing permanently USB powered. Other nodes see the charge level
+  the way they would for any battery-powered node.
+- New firmware patch 0005 adds a portduino battery source that reads a file the app
+  writes. It sits at the head of `Power::setup()`'s probe chain and is inert unless
+  `MESHTASTICD_BATTERY_FILE` is set.
+- A reading older than three minutes counts as no battery, so a stopped or crashed
+  app falls back to the USB powered state rather than leaving a stale percentage on
+  the mesh.
+- The Node tab carries the switch, on by default, and shows the level currently
+  being published.
+- The build script applies patch 0005 and checks the binary for its log string.
+
+Charging is reported alongside the real percentage rather than as the "plugged in,
+ignore the battery" convention, because a phone always has a battery and the level
+stays meaningful while it charges.
+
 ## 1.0.1
 
 Maintenance release from a full audit of 1.0.0. No new features. Built against

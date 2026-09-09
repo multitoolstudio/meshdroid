@@ -9,6 +9,7 @@
 #        0002  framework WiFi shim: MESHTASTICD_BIND_ADDR for the API server
 #        0003  firmware: config.yaml Lora.Region applied on first boot
 #        0004  firmware: SIGTERM saves the node data and exits (needs 0003 first)
+#        0005  firmware: battery level read from a host-written file
 #   3. Export the TARGET_* variables that platform-native's "buildroot" board
 #      reads, pointing at the NDK toolchain, and run pio.
 #   4. Verify the built binary carries the strings the app depends on, then strip
@@ -128,6 +129,12 @@ if ! grep -q "portduinoCheckShutdown" "$FW/src/platform/portduino/PortduinoGlue.
   echo ">> patching firmware for clean shutdown on SIGTERM (0004)"
   patch -p1 -d "$FW" < "$ROOT/0004-portduino-clean-shutdown.patch"
 fi
+if ! grep -q "portduinoFileBatteryInit" "$FW/src/Power.cpp"; then
+  echo ">> patching firmware for host battery level (0005)"
+  patch -p1 -d "$FW" < "$ROOT/0005-portduino-battery-file.patch"
+fi
+grep -q "portduinoFileBatteryInit" "$FW/src/Power.cpp" || {
+  echo "!! patch 0005 did not apply to src/Power.cpp."; exit 1; }
 for marker in portduinoApplyInitialRegion portduinoCheckShutdown; do
   grep -q "$marker" "$FW/src/platform/portduino/PortduinoGlue.cpp" || {
     echo "!! $marker missing from PortduinoGlue.cpp; patch 0003 or 0004 failed."; exit 1; }
@@ -175,7 +182,7 @@ file "$OUT" | grep "ARM aarch64" >/dev/null || { echo "!! $OUT is not an aarch64
 # grep searches the binary directly. Piping "strings" into "grep -q" looks
 # tidier but fails under "set -o pipefail" whenever the match is found early:
 # grep exits, strings dies of SIGPIPE, and the pipeline reports failure.
-for s in "API server binding" "Using pre-opened CH341 fd" "saving node data and exiting"; do
+for s in "API server binding" "Using pre-opened CH341 fd" "saving node data and exiting" "Using host battery level from"; do
   LC_ALL=C grep -qaF -- "$s" "$OUT" || { echo "!! built binary has no \"$s\" string; a patch did not make it into this build."; exit 1; }
 done
 

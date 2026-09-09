@@ -79,12 +79,14 @@ fun NodeScreen(
     val serial by DaemonState.radioSerial.collectAsStateWithLifecycle()
     val regionUnset by DaemonState.regionUnset.collectAsStateWithLifecycle()
     val configVersion by NodeFiles.configVersion.collectAsStateWithLifecycle()
+    val battery by DaemonState.battery.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val running = status == NodeStatus.RUNNING || status == NodeStatus.STARTING || status == NodeStatus.STOPPING
 
     var lan by remember { mutableStateOf(false) }
     var autoStart by remember { mutableStateOf(true) }
+    var batteryReport by remember { mutableStateOf(true) }
     var confirmReset by remember { mutableStateOf(false) }
     var region by remember { mutableStateOf<String?>(null) }
     var regionMenu by remember { mutableStateOf(false) }
@@ -94,8 +96,10 @@ fun NodeScreen(
     // Settings and config.yaml are read off the main thread, and the region is read
     // again whenever config.yaml changes (an import, a restore, or the Config tab).
     LaunchedEffect(Unit) {
-        val values = withContext(Dispatchers.IO) { Settings.lanEnabled(ctx) to Settings.autoStart(ctx) }
-        lan = values.first; autoStart = values.second
+        val values = withContext(Dispatchers.IO) {
+            Triple(Settings.lanEnabled(ctx), Settings.autoStart(ctx), Settings.batteryReport(ctx))
+        }
+        lan = values.first; autoStart = values.second; batteryReport = values.third
     }
     LaunchedEffect(configVersion) {
         region = withContext(Dispatchers.IO) { runCatching { NodeFiles.readRegion(ctx) }.getOrNull() }
@@ -225,6 +229,33 @@ fun NodeScreen(
                             lan = v
                             scope.launch {
                                 withContext(Dispatchers.IO) { Settings.setLanEnabled(ctx, v) }
+                                if (running) snackbar.showSnackbar(ctx.getString(R.string.snack_restart_to_apply))
+                            }
+                        })
+                    }
+                )
+                HorizontalDivider()
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.item_battery)) },
+                    supportingContent = {
+                        val reading = battery
+                        Text(
+                            when {
+                                !batteryReport -> stringResource(R.string.item_battery_off)
+                                reading == null -> stringResource(R.string.item_battery_on)
+                                else -> stringResource(R.string.item_battery_now, reading.percent, when {
+                                    reading.charging -> stringResource(R.string.battery_charging)
+                                    reading.powered -> stringResource(R.string.battery_plugged)
+                                    else -> ""
+                                })
+                            }
+                        )
+                    },
+                    trailingContent = {
+                        Switch(checked = batteryReport, onCheckedChange = { v ->
+                            batteryReport = v
+                            scope.launch {
+                                withContext(Dispatchers.IO) { Settings.setBatteryReport(ctx, v) }
                                 if (running) snackbar.showSnackbar(ctx.getString(R.string.snack_restart_to_apply))
                             }
                         })
