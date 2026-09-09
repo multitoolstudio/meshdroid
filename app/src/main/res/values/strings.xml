@@ -22,7 +22,21 @@
     <string name="tab_node">Node</string>
     <string name="tab_config">Config</string>
     <string name="tab_mesh">Mesh</string>
+    <string name="tab_bbs">BBS</string>
     <string name="tab_logs">Logs</string>
+
+    <!-- BBS tab -->
+    <string name="bbs_running">BBS answering</string>
+    <string name="bbs_stopped">BBS off</string>
+    <string name="bbs_explain">Answers commands sent to this node from the mesh. Direct messages always, channel messages when they start with the prefix.</string>
+    <string name="bbs_needs_node">Waiting for the node to start.</string>
+    <string name="bbs_takes_slot">Sharing is off, so the BBS holds the node\'s only connection while it runs.</string>
+    <string name="bbs_modules">Commands: %1$s</string>
+    <string name="bbs_on_channels">Answer on channels</string>
+    <string name="bbs_on_channels_detail">Channel messages starting with %1$s are treated as commands. Direct messages are always answered.</string>
+    <string name="bbs_activity">Activity</string>
+    <string name="bbs_console">Try a command locally</string>
+    <string name="bbs_run">Run</string>
 
     <!-- Mesh tab -->
     <string name="link_disconnected">Link disconnected</string>

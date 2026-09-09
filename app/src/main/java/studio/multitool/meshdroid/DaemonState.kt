@@ -190,6 +190,23 @@ object Settings {
 
     // With the proxy on, several clients share the node's single API connection. Off hands
     // port 4403 straight back to the daemon and restores the one-client behaviour.
+    // The BBS answers commands from the mesh. Off by default: it transmits on its own,
+    // and an operator should opt into that.
+    fun bbsEnabled(ctx: Context) = prefs(ctx).getBoolean("bbs", false)
+    fun setBbsEnabled(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("bbs", v).apply()
+
+    /** Answer commands seen on a channel, not only direct messages. */
+    fun bbsOnChannels(ctx: Context) = prefs(ctx).getBoolean("bbs_channels", true)
+    fun setBbsOnChannels(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("bbs_channels", v).apply()
+
+    /** What marks a channel message as meant for the BBS. Direct messages need no prefix. */
+    fun bbsPrefix(ctx: Context) = prefs(ctx).getString("bbs_prefix", "!") ?: "!"
+    fun setBbsPrefix(ctx: Context, v: String) = prefs(ctx).edit().putString("bbs_prefix", v.ifBlank { "!" }).apply()
+
+    /** Seconds before the same sender gets another reply. */
+    fun bbsCooldownSeconds(ctx: Context) = prefs(ctx).getInt("bbs_cooldown", 10)
+    fun setBbsCooldownSeconds(ctx: Context, v: Int) = prefs(ctx).edit().putInt("bbs_cooldown", v).apply()
+
     fun proxyEnabled(ctx: Context) = prefs(ctx).getBoolean("proxy", true)
     fun setProxyEnabled(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("proxy", v).apply()
 

@@ -191,6 +191,11 @@ Kotlin, Jetpack Compose, Material 3. One module, no dependency injection.
 | `mesh/MeshLink.kt` | The transport interface and its domain types. Nothing above it sees a protobuf. |
 | `mesh/MeshtasticTcpLink.kt` | MeshLink over meshtasticd's TCP API: framing, the want_config handshake, heartbeats, reconnect. |
 | `mesh/StreamFrames.kt` | The 0x94 0xc3 length-prefixed framing, with resync. |
+| `bbs/BbsEngine.kt` | Dispatches commands to modules, rate limits and spaces the replies. |
+| `bbs/BbsModule.kt` | The module interface and the parsed request handed to one. |
+| `bbs/BuiltinModules.kt` | help, about, ping, board, mail. |
+| `bbs/BbsStore.kt` | Bulletins and mail in SQLite. |
+| `bbs/BbsHolder.kt` | Process-wide owner; follows the node status and the setting. |
 | `mesh/MeshProxy.kt` | Shares the daemon's single API connection between several clients. |
 | `mesh/MeshLinkHolder.kt` | Process-wide owner of the link and a capped event history for the Mesh tab. |
 | `PhoneSensors.kt` | Runtime probe of the phone's environment sensors, and one-shot reads. |
@@ -248,6 +253,22 @@ builds the same Telemetry packet a sensor-equipped node would send. The second r
 nothing on a firmware bump and lets the published field set be a runtime decision, which
 suits hardware that varies as much as phone sensors do. The trade is that it only works
 while the link holds the daemon's client slot.
+
+## The BBS
+
+`BbsEngine` consumes `MeshEvent.Text` from its own `MeshLink` and replies through the same
+interface, so no module sees a protobuf and the command set carries to another protocol
+unchanged. Modules declare a keyword and return text; the engine handles selection, the
+rate limit and the sending.
+
+Three deliberate limits. One reply per sender per cooldown, so a looping node cannot hold
+the channel. Four seconds between transmissions, because airtime is shared. And replies
+split on word boundaries to at most three packets, which is why listings show a count and
+the first few entries rather than everything.
+
+The engine holds its own connection rather than sharing the Mesh tab's, so a BBS does not
+depend on a screen being open. That is one more proxy client, which costs nothing while
+sharing is on and takes the node's only slot when it is off.
 
 ## Lifecycle
 

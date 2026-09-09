@@ -129,6 +129,19 @@ meshtasticd accepts one client and connecting here disconnects that app. This ta
 is an interface, so the same code will work through a multiplexer later, and against
 MeshCore after that.
 
+### BBS
+
+A bulletin board and mail drop that answers commands sent to this node. Built in: `help`,
+`about`, `ping`, `board list`, `board read <n>`, `board post <text>`, `mail` to collect
+yours and `mail <to> <text>` to leave one.
+
+Direct messages to the node are treated as commands. Channel messages count only when they
+start with `!`, so ordinary conversation is left alone. Replies are spaced out and limited
+per sender, because the channel is shared.
+
+The tab carries a console that runs a command locally without transmitting, which is the
+quickest way to see what a command does.
+
 ### Logs
 
 The live daemon log. **Export** writes it to a file through the file picker,

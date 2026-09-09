@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.2.4
+
+The BBS. A bulletin board and mail drop that answers commands from the mesh.
+
+- New **BBS** tab: a switch, the activity log of what was asked and what was answered, and
+  a console that runs a command locally without transmitting.
+- Built-in commands: `help`, `about`, `ping`, `board` (list, read, post) and `mail` (send
+  and collect). Bulletins and mail live in SQLite in the app's private storage.
+- Direct messages are always treated as commands. Channel messages count only when they
+  start with the prefix, `!` by default, which keeps the BBS out of ordinary conversation.
+- Replies are queued and spaced four seconds apart, split on word boundaries when longer
+  than a packet, capped at three parts, and limited to one reply per sender per cooldown.
+  A BBS that answers instantly and at length is a BBS that saturates the channel.
+- The BBS holds its own connection to the node rather than sharing the Mesh tab's, so it
+  runs whether or not a screen is open. With sharing on that connection is one client among
+  several; with it off the BBS takes the node's only slot, which the tab says.
+- Off by default.
+
+Modules are written against the transport interface rather than against protobuf, so the
+same command set will work over MeshCore later. User-supplied modules are next.
+
 ## 1.2.3
 
 The multiplexing proxy. Several clients can share the node at once.

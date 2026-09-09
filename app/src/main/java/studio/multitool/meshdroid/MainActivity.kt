@@ -69,6 +69,8 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         requestNotificationPermission()
         lifecycleScope.launch(Dispatchers.IO) { Settings.warm(this@MainActivity) }
+        // The BBS follows the node and the setting, whether or not its tab is ever opened.
+        studio.multitool.meshdroid.bbs.BbsHolder.init(applicationContext)
 
         registerReceiver(usbReceiver, IntentFilter(ACTION_USB_PERMISSION), Context.RECEIVER_NOT_EXPORTED)
         registerReceiver(usbReceiver, IntentFilter().apply {
