@@ -53,7 +53,16 @@ sealed interface MeshEvent {
         val text: String,
         val rxTime: Long,
         val snr: Float?,
-        val rssi: Int?
+        val rssi: Int?,
+        /** Hops the packet took to arrive, or null when the firmware did not say. Zero means heard directly. */
+        val hopsAway: Int?,
+        /**
+         * True when the packet arrived encrypted to this node's public key, which the
+         * firmware only reports after decrypting it with the matching private key. A
+         * sender's node number is trivially forged; this is not, so it is what the admin
+         * commands check.
+         */
+        val pkiEncrypted: Boolean
     ) : MeshEvent {
         val isDirect get() = to != NodeId.BROADCAST
     }

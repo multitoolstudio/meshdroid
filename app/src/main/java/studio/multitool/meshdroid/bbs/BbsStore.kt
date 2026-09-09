@@ -13,10 +13,22 @@ import android.database.sqlite.SQLiteOpenHelper
  * the app's private storage alongside the node's own files and is not part of the node
  * backup, since it belongs to Meshdroid rather than to meshtasticd.
  */
-class BbsStore(ctx: Context) : SQLiteOpenHelper(ctx, "bbs.db", null, 1) {
+class BbsStore(ctx: Context) : SQLiteOpenHelper(ctx, "bbs.db", null, 2) {
 
     data class Bulletin(val id: Long, val from: String, val text: String, val at: Long)
     data class Mail(val id: Long, val from: String, val to: String, val text: String, val at: Long)
+    data class Admin(val nodeId: String, val label: String, val at: Long)
+
+    /**
+     * Caps on what the mesh can put here. A node that floods the board would otherwise fill
+     * the phone's storage, and there is no way to ask a stranger to stop.
+     */
+    companion object {
+        const val MAX_BULLETINS = 200
+        const val MAX_BULLETINS_PER_SENDER_HOUR = 5
+        const val MAX_PENDING_MAIL = 500
+        const val MAX_PENDING_MAIL_PER_SENDER = 20
+    }
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -30,16 +42,39 @@ class BbsStore(ctx: Context) : SQLiteOpenHelper(ctx, "bbs.db", null, 1) {
         )
         // Mail is read by recipient, and unread mail first.
         db.execSQL("CREATE INDEX mail_recipient ON mail (recipient, delivered)")
+        createAdmins(db)
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
+        if (old < 2) createAdmins(db)
+    }
+
+    private fun createAdmins(db: SQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS admins (node_id TEXT PRIMARY KEY, label TEXT NOT NULL, at INTEGER NOT NULL)"
+        )
+    }
 
     // ---- bulletins ----
 
-    fun postBulletin(sender: String, body: String): Long =
-        writableDatabase.insert("bulletins", null, ContentValues().apply {
+    /** Bulletins this sender posted in the last hour, for the per-sender quota. */
+    fun bulletinsBySenderSince(sender: String, sinceSeconds: Long): Int =
+        readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM bulletins WHERE sender = ? AND at >= ?", arrayOf(sender, "$sinceSeconds")
+        ).use { c -> if (c.moveToNext()) c.getInt(0) else 0 }
+
+    fun postBulletin(sender: String, body: String): Long {
+        val id = writableDatabase.insert("bulletins", null, ContentValues().apply {
             put("sender", sender); put("body", body); put("at", now())
         })
+        // Oldest out when the board is full, so storage stays bounded without an operator
+        // having to prune by hand.
+        writableDatabase.execSQL(
+            "DELETE FROM bulletins WHERE id NOT IN (SELECT id FROM bulletins ORDER BY id DESC LIMIT ?)",
+            arrayOf(MAX_BULLETINS.toString())
+        )
+        return id
+    }
 
     /** Newest first, which is the order a caller wants to read them in. */
     fun bulletins(limit: Int = 20): List<Bulletin> =
@@ -63,6 +98,11 @@ class BbsStore(ctx: Context) : SQLiteOpenHelper(ctx, "bbs.db", null, 1) {
         writableDatabase.delete("bulletins", "id = ?", arrayOf("$id")) > 0
 
     // ---- mail ----
+
+    fun pendingMailFrom(sender: String): Int =
+        readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM mail WHERE sender = ? AND delivered = 0", arrayOf(sender)
+        ).use { c -> if (c.moveToNext()) c.getInt(0) else 0 }
 
     fun sendMail(sender: String, recipient: String, body: String): Long =
         writableDatabase.insert("mail", null, ContentValues().apply {
@@ -90,6 +130,44 @@ class BbsStore(ctx: Context) : SQLiteOpenHelper(ctx, "bbs.db", null, 1) {
         readableDatabase.rawQuery("SELECT COUNT(*) FROM mail WHERE delivered = 0", null).use { c ->
             if (c.moveToNext()) c.getInt(0) else 0
         }
+
+    // ---- admins ----
+    // Node numbers allowed to run admin commands. Membership alone is not authority: the
+    // engine also requires the command to arrive encrypted to this node's key, because a
+    // sender's node number can be set to anything.
+
+    fun admins(): List<Admin> =
+        readableDatabase.rawQuery("SELECT node_id, label, at FROM admins ORDER BY label", null).use { c ->
+            buildList { while (c.moveToNext()) add(Admin(c.getString(0), c.getString(1), c.getLong(2))) }
+        }
+
+    fun isAdmin(nodeId: String): Boolean =
+        readableDatabase.rawQuery("SELECT 1 FROM admins WHERE node_id = ?", arrayOf(nodeId)).use { it.moveToNext() }
+
+    fun addAdmin(nodeId: String, label: String) {
+        writableDatabase.insertWithOnConflict("admins", null, ContentValues().apply {
+            put("node_id", nodeId); put("label", label); put("at", now())
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun removeAdmin(nodeId: String): Boolean =
+        writableDatabase.delete("admins", "node_id = ?", arrayOf(nodeId)) > 0
+
+    fun adminCount(): Int =
+        readableDatabase.rawQuery("SELECT COUNT(*) FROM admins", null).use { c -> if (c.moveToNext()) c.getInt(0) else 0 }
+
+    // ---- clearing ----
+
+    fun clearBulletins(): Int = writableDatabase.delete("bulletins", null, null)
+
+    /** Removes every message, delivered or not. */
+    fun clearMail(): Int = writableDatabase.delete("mail", null, null)
+
+    /** Removes mail that has already been collected, leaving anything still waiting. */
+    fun clearDeliveredMail(): Int = writableDatabase.delete("mail", "delivered = 1", null)
+
+    fun mailCount(): Int =
+        readableDatabase.rawQuery("SELECT COUNT(*) FROM mail", null).use { c -> if (c.moveToNext()) c.getInt(0) else 0 }
 
     private fun now() = System.currentTimeMillis() / 1000
 }

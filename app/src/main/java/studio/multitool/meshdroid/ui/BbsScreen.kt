@@ -17,7 +17,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
@@ -79,6 +82,22 @@ fun BbsScreen() {
     var prefix by remember { mutableStateOf("!") }
     var console by remember { mutableStateOf("") }
     var consoleOut by remember { mutableStateOf<String?>(null) }
+    var requirePki by remember { mutableStateOf(true) }
+    var admins by remember { mutableStateOf<List<studio.multitool.meshdroid.bbs.BbsStore.Admin>>(emptyList()) }
+    var newAdmin by remember { mutableStateOf("") }
+    var counts by remember { mutableStateOf(Triple(0, 0, 0)) }
+    var confirmClear by remember { mutableStateOf<String?>(null) }
+
+    fun refreshCounts() {
+        scope.launch {
+            val store = engine.storeHandle()
+            val result = withContext(Dispatchers.IO) {
+                Triple(store.bulletinCount(), store.mailCount(), store.pendingMailCount()) to store.admins()
+            }
+            counts = result.first
+            admins = result.second
+        }
+    }
 
     LaunchedEffect(Unit) {
         BbsHolder.init(ctx)
@@ -86,7 +105,9 @@ fun BbsScreen() {
             enabled = Settings.bbsEnabled(ctx)
             onChannels = Settings.bbsOnChannels(ctx)
             prefix = Settings.bbsPrefix(ctx)
+            requirePki = Settings.bbsAdminRequiresPki(ctx)
         }
+        refreshCounts()
     }
     LaunchedEffect(entries.size) { if (entries.isNotEmpty()) listState.scrollToItem(entries.size - 1) }
 
@@ -128,6 +149,86 @@ fun BbsScreen() {
                             Switch(checked = onChannels, onCheckedChange = { v ->
                                 onChannels = v
                                 scope.launch { withContext(Dispatchers.IO) { Settings.setBbsOnChannels(ctx, v) } }
+                            })
+                        }
+                    )
+                }
+            }
+
+            if (!keyboardOpen) Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(vertical = 8.dp)) {
+                    ListItem(
+                        headlineContent = { Text(stringResource(R.string.bbs_storage)) },
+                        supportingContent = {
+                            Text(stringResource(R.string.bbs_storage_detail, counts.first, counts.second, counts.third))
+                        }
+                    )
+                    Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { confirmClear = "board" }) { Text(stringResource(R.string.bbs_clear_board)) }
+                        OutlinedButton(onClick = { confirmClear = "mail" }) { Text(stringResource(R.string.bbs_clear_mail)) }
+                        TextButton(onClick = { confirmClear = "delivered" }) { Text(stringResource(R.string.bbs_clear_delivered)) }
+                    }
+                    HorizontalDivider()
+                    ListItem(
+                        headlineContent = { Text(stringResource(R.string.bbs_admins)) },
+                        supportingContent = {
+                            Text(
+                                if (admins.isEmpty()) stringResource(R.string.bbs_admins_none)
+                                else admins.joinToString(", ") { it.nodeId }
+                            )
+                        }
+                    )
+                    Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = newAdmin,
+                            onValueChange = { newAdmin = it },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            label = { Text(stringResource(R.string.bbs_admin_add_hint)) }
+                        )
+                        Button(
+                            onClick = {
+                                val entered = newAdmin
+                                newAdmin = ""
+                                scope.launch {
+                                    withContext(Dispatchers.IO) {
+                                        val address = studio.multitool.meshdroid.bbs.Sanitize.address(entered)
+                                        if (studio.multitool.meshdroid.bbs.Sanitize.isNodeAddress(address)) {
+                                            engine.storeHandle().addAdmin(address, address)
+                                        }
+                                    }
+                                    refreshCounts()
+                                }
+                            },
+                            enabled = newAdmin.isNotBlank()
+                        ) { Text(stringResource(R.string.bbs_admin_add)) }
+                    }
+                    admins.forEach { a ->
+                        ListItem(
+                            headlineContent = { Text(a.nodeId, style = MaterialTheme.typography.bodyMedium) },
+                            trailingContent = {
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        withContext(Dispatchers.IO) { engine.storeHandle().removeAdmin(a.nodeId) }
+                                        refreshCounts()
+                                    }
+                                }) { Text(stringResource(R.string.bbs_admin_remove)) }
+                            }
+                        )
+                    }
+                    HorizontalDivider()
+                    ListItem(
+                        headlineContent = { Text(stringResource(R.string.bbs_admin_pki)) },
+                        supportingContent = {
+                            Text(stringResource(if (requirePki) R.string.bbs_admin_pki_on else R.string.bbs_admin_pki_off))
+                        },
+                        trailingContent = {
+                            Switch(checked = requirePki, onCheckedChange = { v ->
+                                requirePki = v
+                                scope.launch { withContext(Dispatchers.IO) { Settings.setBbsAdminRequiresPki(ctx, v) } }
                             })
                         }
                     )
@@ -184,5 +285,36 @@ fun BbsScreen() {
                 ) { Text(stringResource(R.string.bbs_run)) }
             }
         }
+    }
+
+    confirmClear?.let { what ->
+        AlertDialog(
+            onDismissRequest = { confirmClear = null },
+            title = { Text(stringResource(R.string.bbs_clear_title)) },
+            text = {
+                Text(stringResource(when (what) {
+                    "board" -> R.string.bbs_clear_board_text
+                    "mail" -> R.string.bbs_clear_mail_text
+                    else -> R.string.bbs_clear_delivered_text
+                }))
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmClear = null
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            val store = engine.storeHandle()
+                            when (what) {
+                                "board" -> store.clearBulletins()
+                                "mail" -> store.clearMail()
+                                else -> store.clearDeliveredMail()
+                            }
+                        }
+                        refreshCounts()
+                    }
+                }) { Text(stringResource(R.string.bbs_clear_confirm)) }
+            },
+            dismissButton = { TextButton(onClick = { confirmClear = null }) { Text(stringResource(R.string.btn_cancel)) } }
+        )
     }
 }

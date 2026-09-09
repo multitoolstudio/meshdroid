@@ -194,7 +194,12 @@ class MeshtasticTcpLink(
                 text = data.payload.toStringUtf8(),
                 rxTime = if (p.hasRxTime()) p.rxTime.toLong() and 0xFFFFFFFFL else System.currentTimeMillis() / 1000,
                 snr = if (p.rxSnr != 0f) p.rxSnr else null,
-                rssi = if (p.hasRxRssi()) p.rxRssi else null
+                rssi = if (p.hasRxRssi()) p.rxRssi else null,
+                // hop_start is what the sender set out with and hop_limit is what is left,
+                // so the difference is how far this packet travelled. Older senders leave
+                // hop_start at zero, where the count is unknown rather than zero hops.
+                hopsAway = if (p.hopStart > 0) (p.hopStart - p.hopLimit).coerceAtLeast(0) else null,
+                pkiEncrypted = p.pkiEncrypted
             ))
             else -> emit(MeshEvent.Other(NodeId(p.from), data.portnum.name, data.payload.size()))
         }

@@ -35,9 +35,19 @@ data class BbsRequest(
     val direct: Boolean,
     val channel: Int,
     val snr: Float?,
+    val rssi: Int?,
+    /** Hops this message took, zero for heard directly, null when the sender did not say. */
+    val hopsAway: Int?,
+    /** True when the message arrived encrypted to this node's key. Admin commands need it. */
+    val pkiEncrypted: Boolean,
     val receivedAt: Long,
-    val store: BbsStore
+    val store: BbsStore,
+    /** Resolves a name or a mention to a node number, when the node is one this node knows. */
+    val resolve: (String) -> NodeId? = { null }
 ) {
+    /** The sender's node number in the canonical `!hex` form used for addresses and admins. */
+    fun fromAddress(): String = from.toString()
+
     /** Args split on whitespace, empty entries dropped. */
     fun words(): List<String> = args.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
 

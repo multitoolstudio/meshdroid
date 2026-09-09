@@ -132,8 +132,15 @@ MeshCore after that.
 ### BBS
 
 A bulletin board and mail drop that answers commands sent to this node. Built in: `help`,
-`about`, `ping`, `board list`, `board read <n>`, `board post <text>`, `mail` to collect
-yours and `mail <to> <text>` to leave one.
+`about`, `ping` and `test` (which report snr and rssi when heard directly, or the hop count
+when relayed), `board list`, `board read <n>`, `board post <text>`, `mail` to collect yours
+and `mail <to> <text>` to leave one. Mail takes a name, a node id, or the `@!433d8ac0`
+mention the Meshtastic app inserts.
+
+Operators can add admin node ids in the tab, which unlocks `admin status`,
+`admin clear board`, `admin clear mail` and `admin delete <n>` over the mesh. Those are
+accepted only in an encrypted direct message, because a node id in a packet is whatever the
+sender chose to put there. The tab also clears the board and mail directly.
 
 Direct messages to the node are treated as commands. Channel messages count only when they
 start with `!`, so ordinary conversation is left alone. Replies are spaced out and limited

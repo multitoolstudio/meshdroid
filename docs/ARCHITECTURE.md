@@ -194,6 +194,7 @@ Kotlin, Jetpack Compose, Material 3. One module, no dependency injection.
 | `bbs/BbsEngine.kt` | Dispatches commands to modules, rate limits and spaces the replies. |
 | `bbs/BbsModule.kt` | The module interface and the parsed request handed to one. |
 | `bbs/BuiltinModules.kt` | help, about, ping, board, mail. |
+| `bbs/Sanitize.kt` | Cleans text arriving from the mesh, and normalises mail addresses. |
 | `bbs/BbsStore.kt` | Bulletins and mail in SQLite. |
 | `bbs/BbsHolder.kt` | Process-wide owner; follows the node status and the setting. |
 | `mesh/MeshProxy.kt` | Shares the daemon's single API connection between several clients. |
@@ -269,6 +270,20 @@ the first few entries rather than everything.
 The engine holds its own connection rather than sharing the Mesh tab's, so a BBS does not
 depend on a screen being open. That is one more proxy client, which costs nothing while
 sharing is on and takes the node's only slot when it is off.
+
+### Trusting what arrives
+
+Commands come from strangers. Nothing interprets them, and every query is parameterised, so
+the risks are narrower than they first look: text that renders as something other than what
+it is, and storage filled by a flooding node. `Sanitize` strips control characters, terminal
+escapes, bidirectional overrides and zero-width characters on the way in, and the store caps
+bulletins per sender per hour, bulletins in total and mail per sender.
+
+Admin commands need something stronger, because a packet's `from` field is whatever the
+sender put there. Membership of the admins table is checked, and so is `pki_encrypted`,
+which the firmware sets only after decrypting a message with this node's private key. That
+is a signature in everything but name, and it is why the check is on by default. The switch
+that relaxes it exists for meshes running without keys, and the UI states the consequence.
 
 ## Lifecycle
 

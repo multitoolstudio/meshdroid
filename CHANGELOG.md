@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.2.5
+
+Hardening and housekeeping for the BBS.
+
+- Every command from the mesh is cleaned before anything stores or displays it: control
+  characters, terminal escapes, bidirectional overrides and zero-width characters are
+  removed, and length is capped. Nothing interprets these commands, and every database call
+  was already parameterised, so this closes the quieter problems rather than a hole.
+- Storage is bounded. The board keeps its most recent 200 bulletins, a sender may post five
+  in an hour, and mail has a per-sender and a total limit. A flooding node can no longer
+  fill the phone.
+- Mail understands the mention the Meshtastic app inserts. `mail @!433d8ac0 hello`,
+  `mail !433d8ac0 hello` and `mail alice hello` all work, and a name that matches a known
+  node is stored as that node's number so the mail survives a rename.
+- `ping` and `test` report the path. Heard directly gives snr and rssi; relayed gives the
+  hop count, since signal figures describe the last hop rather than the whole path.
+- New `admin` command: `admin status`, `admin clear board`, `admin clear mail`,
+  `admin clear delivered` and `admin delete <n>`, refused on channels and from anyone not
+  in the admin table.
+- Admin commands require an encrypted direct message by default. A sender's node number is
+  whatever they put in the packet, so the admin list alone authenticates nobody; the
+  firmware reports pki_encrypted only after decrypting with this node's private key, which
+  a forger cannot produce. The requirement can be turned off for a mesh without keys, and
+  the switch says what that costs.
+- The BBS tab manages admin nodes and clears the board, all mail, or just collected mail,
+  with counts.
+
 ## 1.2.4
 
 The BBS. A bulletin board and mail drop that answers commands from the mesh.

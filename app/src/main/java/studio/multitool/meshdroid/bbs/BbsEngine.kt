@@ -58,6 +58,7 @@ class BbsEngine(private val ctx: Context, private val link: MeshLink = Meshtasti
         modules += PingModule()
         modules += BoardModule()
         modules += MailModule()
+        modules += AdminModule { Settings.bbsAdminRequiresPki(ctx) }
     }
 
     fun start() {
@@ -95,7 +96,10 @@ class BbsEngine(private val ctx: Context, private val link: MeshLink = Meshtasti
 
     private suspend fun handleText(event: MeshEvent.Text) {
         val prefix = Settings.bbsPrefix(ctx)
-        val body = event.text.trim()
+        // Cleaned once, here, so no module has to think about control characters, bidi
+        // overrides or length. Nothing downstream interprets this text, but it is stored
+        // and displayed, and both of those deserve clean input.
+        val body = Sanitize.line(event.text, MAX_COMMAND)
 
         // Direct messages are addressed to this node already. On a shared channel the
         // prefix keeps the BBS out of ordinary conversation.
@@ -117,8 +121,12 @@ class BbsEngine(private val ctx: Context, private val link: MeshLink = Meshtasti
             direct = event.isDirect,
             channel = event.channel,
             snr = event.snr,
+            rssi = event.rssi,
+            hopsAway = event.hopsAway,
+            pkiEncrypted = event.pkiEncrypted,
             receivedAt = event.rxTime,
-            store = store
+            store = store,
+            resolve = ::resolveNode
         )
 
         // An unknown word on a channel is somebody talking, not a failed command. In a
@@ -192,6 +200,16 @@ class BbsEngine(private val ctx: Context, private val link: MeshLink = Meshtasti
 
     private fun nameFor(id: NodeId): String? = names[id.value]
 
+    /** Finds a node by the name it is known by, for addressing mail to a name. */
+    private fun resolveNode(address: String): NodeId? {
+        val wanted = Sanitize.address(address)
+        if (Sanitize.isNodeAddress(wanted)) {
+            return wanted.drop(1).toLongOrNull(16)?.toInt()?.let { NodeId(it) }
+        }
+        val hit = names.entries.firstOrNull { Sanitize.address(it.value) == wanted } ?: return null
+        return NodeId(hit.key)
+    }
+
     private fun record(entry: Entry) {
         _log.value = (_log.value + entry).let { if (it.size > LOG_MAX) it.drop(it.size - LOG_MAX) else it }
     }
@@ -201,8 +219,14 @@ class BbsEngine(private val ctx: Context, private val link: MeshLink = Meshtasti
         val keyword = text.trim().substringBefore(' ').lowercase()
         val module = modules.firstOrNull { it.keyword == keyword || keyword in it.aliases }
             ?: return "Unknown command. Send help for the list."
-        val request = BbsRequest(from, "local", keyword, text.trim().substringAfter(' ', ""),
-            direct = true, channel = 0, snr = null, receivedAt = System.currentTimeMillis() / 1000, store = store)
+        val request = BbsRequest(
+            from = from, fromName = "local", keyword = keyword,
+            args = Sanitize.line(text.trim().substringAfter(' ', ""), MAX_COMMAND),
+            direct = true, channel = 0, snr = null, rssi = null, hopsAway = 0,
+            // The console runs on this device, so it is as trusted as the app itself.
+            pkiEncrypted = true,
+            receivedAt = System.currentTimeMillis() / 1000, store = store, resolve = ::resolveNode
+        )
         return runCatching { module.handle(request) }.getOrElse { "That command failed: ${it.message}" }
     }
 
@@ -216,5 +240,7 @@ class BbsEngine(private val ctx: Context, private val link: MeshLink = Meshtasti
         private const val MARKER_ROOM = 8
         private const val MAX_PARTS = 3
         private const val SEND_GAP_MS = 4000L
+        /** Longest command accepted. A text packet cannot carry more than about this. */
+        private const val MAX_COMMAND = 240
     }
 }

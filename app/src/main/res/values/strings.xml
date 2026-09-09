@@ -37,6 +37,24 @@
     <string name="bbs_activity">Activity</string>
     <string name="bbs_console">Try a command locally</string>
     <string name="bbs_run">Run</string>
+    <string name="bbs_storage">Stored</string>
+    <string name="bbs_storage_detail">%1$d bulletins, %2$d messages (%3$d waiting to be collected)</string>
+    <string name="bbs_clear_board">Clear board</string>
+    <string name="bbs_clear_mail">Clear mail</string>
+    <string name="bbs_clear_delivered">Clear collected</string>
+    <string name="bbs_clear_title">Clear this?</string>
+    <string name="bbs_clear_board_text">Deletes every bulletin. Nothing is recoverable.</string>
+    <string name="bbs_clear_mail_text">Deletes every message, including mail nobody has collected yet.</string>
+    <string name="bbs_clear_delivered_text">Deletes mail that has already been collected. Anything still waiting is kept.</string>
+    <string name="bbs_clear_confirm">Clear</string>
+    <string name="bbs_admins">Admin nodes</string>
+    <string name="bbs_admins_none">None. Admin commands are refused.</string>
+    <string name="bbs_admin_add_hint">Node id, e.g. !433d8ac0</string>
+    <string name="bbs_admin_add">Add</string>
+    <string name="bbs_admin_remove">Remove</string>
+    <string name="bbs_admin_pki">Require encrypted admin messages</string>
+    <string name="bbs_admin_pki_on">Admin commands are accepted only from an encrypted direct message, which a sender cannot forge by setting a node number. Recommended.</string>
+    <string name="bbs_admin_pki_off">Any direct message from an admin node id is accepted. Node ids are forgeable, so anyone who knows an admin\'s id can clear this board.</string>
 
     <!-- Mesh tab -->
     <string name="link_disconnected">Link disconnected</string>

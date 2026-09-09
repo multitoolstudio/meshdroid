@@ -204,6 +204,13 @@ object Settings {
     fun setBbsPrefix(ctx: Context, v: String) = prefs(ctx).edit().putString("bbs_prefix", v.ifBlank { "!" }).apply()
 
     /** Seconds before the same sender gets another reply. */
+    /**
+     * Require admin commands to arrive encrypted to this node's key. On by default: a
+     * sender's node number is forgeable, so the admin table alone is not authentication.
+     */
+    fun bbsAdminRequiresPki(ctx: Context) = prefs(ctx).getBoolean("bbs_admin_pki", true)
+    fun setBbsAdminRequiresPki(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("bbs_admin_pki", v).apply()
+
     fun bbsCooldownSeconds(ctx: Context) = prefs(ctx).getInt("bbs_cooldown", 10)
     fun setBbsCooldownSeconds(ctx: Context, v: Int) = prefs(ctx).edit().putInt("bbs_cooldown", v).apply()
 
