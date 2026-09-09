@@ -13,9 +13,9 @@ import android.database.sqlite.SQLiteOpenHelper
  * the app's private storage alongside the node's own files and is not part of the node
  * backup, since it belongs to Meshdroid rather than to meshtasticd.
  */
-class BbsStore(ctx: Context) : SQLiteOpenHelper(ctx, "bbs.db", null, 2) {
+class BbsStore(ctx: Context) : SQLiteOpenHelper(ctx, "bbs.db", null, 3) {
 
-    data class Bulletin(val id: Long, val from: String, val text: String, val at: Long)
+    data class Bulletin(val id: Long, val from: String, val title: String, val text: String, val at: Long)
     data class Mail(val id: Long, val from: String, val to: String, val text: String, val at: Long)
     data class Admin(val nodeId: String, val label: String, val at: Long)
 
@@ -33,7 +33,7 @@ class BbsStore(ctx: Context) : SQLiteOpenHelper(ctx, "bbs.db", null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             "CREATE TABLE bulletins (id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-                "sender TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL)"
+                "sender TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', body TEXT NOT NULL, at INTEGER NOT NULL)"
         )
         db.execSQL(
             "CREATE TABLE mail (id INTEGER PRIMARY KEY AUTOINCREMENT, sender TEXT NOT NULL, " +
@@ -47,6 +47,7 @@ class BbsStore(ctx: Context) : SQLiteOpenHelper(ctx, "bbs.db", null, 2) {
 
     override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
         if (old < 2) createAdmins(db)
+        if (old < 3) db.execSQL("ALTER TABLE bulletins ADD COLUMN title TEXT NOT NULL DEFAULT ''")
     }
 
     private fun createAdmins(db: SQLiteDatabase) {
@@ -63,9 +64,9 @@ class BbsStore(ctx: Context) : SQLiteOpenHelper(ctx, "bbs.db", null, 2) {
             "SELECT COUNT(*) FROM bulletins WHERE sender = ? AND at >= ?", arrayOf(sender, "$sinceSeconds")
         ).use { c -> if (c.moveToNext()) c.getInt(0) else 0 }
 
-    fun postBulletin(sender: String, body: String): Long {
+    fun postBulletin(sender: String, title: String, body: String): Long {
         val id = writableDatabase.insert("bulletins", null, ContentValues().apply {
-            put("sender", sender); put("body", body); put("at", now())
+            put("sender", sender); put("title", title); put("body", body); put("at", now())
         })
         // Oldest out when the board is full, so storage stays bounded without an operator
         // having to prune by hand.
@@ -79,23 +80,43 @@ class BbsStore(ctx: Context) : SQLiteOpenHelper(ctx, "bbs.db", null, 2) {
     /** Newest first, which is the order a caller wants to read them in. */
     fun bulletins(limit: Int = 20): List<Bulletin> =
         readableDatabase.rawQuery(
-            "SELECT id, sender, body, at FROM bulletins ORDER BY id DESC LIMIT ?", arrayOf("$limit")
+            "SELECT id, sender, title, body, at FROM bulletins ORDER BY id DESC LIMIT ?", arrayOf("$limit")
         ).use { c ->
-            buildList { while (c.moveToNext()) add(Bulletin(c.getLong(0), c.getString(1), c.getString(2), c.getLong(3))) }
+            buildList {
+                while (c.moveToNext())
+                    add(Bulletin(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getLong(4)))
+            }
         }
 
     fun bulletin(id: Long): Bulletin? =
         readableDatabase.rawQuery(
-            "SELECT id, sender, body, at FROM bulletins WHERE id = ?", arrayOf("$id")
-        ).use { c -> if (c.moveToNext()) Bulletin(c.getLong(0), c.getString(1), c.getString(2), c.getLong(3)) else null }
+            "SELECT id, sender, title, body, at FROM bulletins WHERE id = ?", arrayOf("$id")
+        ).use { c ->
+            if (c.moveToNext()) Bulletin(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getLong(4))
+            else null
+        }
 
     fun bulletinCount(): Int =
         readableDatabase.rawQuery("SELECT COUNT(*) FROM bulletins", null).use { c ->
             if (c.moveToNext()) c.getInt(0) else 0
         }
 
-    fun deleteBulletin(id: Long): Boolean =
-        writableDatabase.delete("bulletins", "id = ?", arrayOf("$id")) > 0
+    fun deleteBulletin(id: Long): Boolean {
+        val gone = writableDatabase.delete("bulletins", "id = ?", arrayOf("$id")) > 0
+        resetNumberingIfEmpty()
+        return gone
+    }
+
+    /**
+     * Numbering restarts at 1 once the board is empty.
+     *
+     * AUTOINCREMENT remembers the highest id ever used, so a cleared board would otherwise
+     * carry on from 148 and every post number people read out would keep growing.
+     */
+    private fun resetNumberingIfEmpty() {
+        if (bulletinCount() > 0) return
+        runCatching { writableDatabase.execSQL("DELETE FROM sqlite_sequence WHERE name = 'bulletins'") }
+    }
 
     // ---- mail ----
 
@@ -158,7 +179,11 @@ class BbsStore(ctx: Context) : SQLiteOpenHelper(ctx, "bbs.db", null, 2) {
 
     // ---- clearing ----
 
-    fun clearBulletins(): Int = writableDatabase.delete("bulletins", null, null)
+    fun clearBulletins(): Int {
+        val n = writableDatabase.delete("bulletins", null, null)
+        resetNumberingIfEmpty()
+        return n
+    }
 
     /** Removes every message, delivered or not. */
     fun clearMail(): Int = writableDatabase.delete("mail", null, null)

@@ -133,8 +133,8 @@ MeshCore after that.
 
 A bulletin board and mail drop that answers commands sent to this node. Built in: `help`,
 `about`, `ping` and `test` (which report snr and rssi when heard directly, or the hop count
-when relayed), `board list`, `board read <n>`, `board post <text>`, `mail` to collect yours
-and `mail <to> <text>` to leave one. Mail takes a name, a node id, or the `@!433d8ac0`
+when relayed), `board list` for numbered titles, `board list <n>` to read one in full, `board post
+@title #body` to leave one, `mail` to collect yours and `mail <to> <text>` to leave one. Mail takes a name, a node id, or the `@!433d8ac0`
 mention the Meshtastic app inserts.
 
 Operators can add admin node ids in the tab, which unlocks `admin status`,

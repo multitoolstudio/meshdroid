@@ -48,7 +48,13 @@ class BbsEngine(private val ctx: Context, private val link: MeshLink = Meshtasti
     /** Time of the last reply to each sender, for the per-sender cooldown. */
     private val lastReplyTo = mutableMapOf<Int, Long>()
 
-    private data class Pending(val to: NodeId?, val channel: Int, val text: String, val entry: Entry)
+    private data class Pending(
+        val to: NodeId?,
+        val channel: Int,
+        val text: String,
+        val entry: Entry,
+        val onDelivered: (() -> Unit)? = null
+    )
 
     private val modules: MutableList<BbsModule> = mutableListOf()
 
@@ -58,7 +64,11 @@ class BbsEngine(private val ctx: Context, private val link: MeshLink = Meshtasti
         modules += PingModule()
         modules += BoardModule()
         modules += MailModule()
-        modules += AdminModule { Settings.bbsAdminRequiresPki(ctx) }
+        modules += AdminModule(
+            requirePki = { Settings.bbsAdminRequiresPki(ctx) },
+            locked = { Settings.bbsLocked(ctx) },
+            setLocked = { Settings.setBbsLocked(ctx, it) }
+        )
     }
 
     fun start() {
@@ -129,6 +139,16 @@ class BbsEngine(private val ctx: Context, private val link: MeshLink = Meshtasti
             resolve = ::resolveNode
         )
 
+        // While an admin has closed the BBS, only admins are answered. A closed board still
+        // says so in a direct message rather than going silent, so nobody is left guessing.
+        if (Settings.bbsLocked(ctx) && keyword != "admin" && !store.isAdmin(request.fromAddress())) {
+            if (event.isDirect && allowedToReply(event.from)) {
+                outbox.trySend(Pending(event.from, event.channel, "The BBS is closed right now.",
+                    Entry(System.currentTimeMillis() / 1000, request.who(), command, "closed", false)))
+            }
+            return
+        }
+
         // An unknown word on a channel is somebody talking, not a failed command. In a
         // direct message it is worth answering, since the sender meant it for this node.
         val reply = when {
@@ -146,7 +166,7 @@ class BbsEngine(private val ctx: Context, private val link: MeshLink = Meshtasti
             record(entry.copy(reply = "$reply [suppressed: too soon]", sent = false))
             return
         }
-        outbox.trySend(Pending(if (event.isDirect) event.from else null, event.channel, reply, entry))
+        outbox.trySend(Pending(if (event.isDirect) event.from else null, event.channel, reply, entry, request.onDelivered))
     }
 
     /**
@@ -175,6 +195,7 @@ class BbsEngine(private val ctx: Context, private val link: MeshLink = Meshtasti
                     .onFailure { sentAll = false; Log.w(TAG, "reply failed: ${it.message}") }
                 if (i < parts.lastIndex) delay(SEND_GAP_MS)
             }
+            if (sentAll) runCatching { pending.onDelivered?.invoke() }
             record(pending.entry.copy(sent = sentAll))
             delay(SEND_GAP_MS)
         }
@@ -192,7 +213,13 @@ class BbsEngine(private val ctx: Context, private val link: MeshLink = Meshtasti
             current.append(token)
         }
         if (current.isNotEmpty()) parts += current.toString().trimEnd()
-        val capped = parts.take(MAX_PARTS)
+        // A single word longer than a part, a URL for instance, never fits the loop above,
+        // so anything still oversized is cut to length here.
+        val capped = parts.take(MAX_PARTS).map { part ->
+            var p = part
+            while (p.toByteArray().size > MAX_PART - MARKER_ROOM) p = p.dropLast(1)
+            p
+        }
         return capped.mapIndexed { i, p -> if (capped.size > 1) "$p (${i + 1}/${capped.size})" else p }
     }
 
@@ -236,9 +263,14 @@ class BbsEngine(private val ctx: Context, private val link: MeshLink = Meshtasti
     companion object {
         private const val TAG = "BbsEngine"
         private const val LOG_MAX = 200
-        private const val MAX_PART = 180        // leaves room for the (n/m) marker
+        /**
+         * Bytes per outgoing message, marker included. The protocol allows more, but 160 is
+         * what stays comfortably inside one packet on every configuration and is the figure
+         * other BBS software sticks to.
+         */
+        private const val MAX_PART = 160
         private const val MARKER_ROOM = 8
-        private const val MAX_PARTS = 3
+        private const val MAX_PARTS = 4
         private const val SEND_GAP_MS = 4000L
         /** Longest command accepted. A text packet cannot carry more than about this. */
         private const val MAX_COMMAND = 240

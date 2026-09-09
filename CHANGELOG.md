@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.2.6
+
+BBS fixes from use, and a split of its screen.
+
+- Fixed the admin field being impossible to type into. The card holding it was hidden while
+  the keyboard was open, so opening the keyboard removed the field, which closed the
+  keyboard, which brought it back.
+- The BBS tab is now the status, the activity log and the console. Admins, storage and
+  answering settings moved to their own screen behind a button.
+- Bulletins have a title: `board post @title #body`. The @ is optional and a post with no
+  # is stored as a title on its own. `board list` shows numbered titles, `board list <n>`
+  or `board read <n>` shows one in full as number, poster, title, body.
+- Post numbering restarts at 1 once the board is empty. AUTOINCREMENT remembered the highest
+  id ever used, so a cleared board carried on counting.
+- Outgoing messages are capped at 160 bytes including the part marker, split on word
+  boundaries, up to four parts. A single word too long to fit is cut rather than sent
+  oversized.
+- Collected mail is marked as read only after the reply has actually been sent. It was
+  marked while composing, so a failed send lost the message.
+- New `admin stop` and `admin start` close and reopen the BBS. While closed, only admins are
+  answered, and a direct message gets told the board is closed rather than being ignored.
+  The same switch is on the settings screen.
+- `admin delete <n>` removes one bulletin, and renumbering follows the rule above.
+
 ## 1.2.5
 
 Hardening and housekeeping for the BBS.

@@ -45,6 +45,13 @@ data class BbsRequest(
     /** Resolves a name or a mention to a node number, when the node is one this node knows. */
     val resolve: (String) -> NodeId? = { null }
 ) {
+    /**
+     * Run by the engine once the reply has actually been sent. A module sets this when an
+     * action should only take effect on delivery, which is how collected mail avoids being
+     * marked as read when the reply never left.
+     */
+    var onDelivered: (() -> Unit)? = null
+
     /** The sender's node number in the canonical `!hex` form used for addresses and admins. */
     fun fromAddress(): String = from.toString()
 

@@ -76,48 +76,84 @@ class PingModule : BbsModule {
 class BoardModule : BbsModule {
     override val keyword = "board"
     override val aliases = listOf("bb")
-    override val help = "board list | board read <n> | board post <text>"
+    override val help = "board list | board list <n> | board post @title #body"
 
     override suspend fun handle(request: BbsRequest): String {
         val words = request.words()
         return when (words.firstOrNull()?.lowercase()) {
-            null, "list" -> list(request)
+            null -> list(request)
+            "list" -> words.getOrNull(1)?.let { read(request, it) } ?: list(request)
             "read" -> read(request, words.getOrNull(1))
             "post" -> post(request)
-            else -> "board list, board read <n>, or board post <text>"
+            else -> help
         }
     }
 
+    /** Titles only, newest first, so the whole board fits in a packet or two. */
     private fun list(request: BbsRequest): String {
-        val items = request.store.bulletins(limit = 5)
-        if (items.isEmpty()) return "No bulletins yet. Post one with: board post <text>"
+        val items = request.store.bulletins(limit = LIST_SIZE)
+        if (items.isEmpty()) return "No bulletins yet. Post one with: board post @title #body"
         val total = request.store.bulletinCount()
-        val lines = items.joinToString("\n") { b ->
-            "${b.id}. ${b.from}: " + b.text.take(40) + if (b.text.length > 40) "..." else ""
-        }
-        val more = if (total > items.size) "\n$total total, board read <n> for one in full" else ""
-        return lines + more
+        val lines = items.joinToString("\n") { "${it.id}. ${it.title}" }
+        val more = if (total > items.size) "\n$total total" else ""
+        return lines + more + "\nboard list <n> to read one"
     }
 
+    /** One post in full: number, who wrote it, title, then the body. */
     private fun read(request: BbsRequest, arg: String?): String {
-        val id = arg?.toLongOrNull() ?: return "Which one? board read <n>"
+        val id = arg?.toLongOrNull() ?: return "Which one? board list <n>"
         val b = request.store.bulletin(id) ?: return "No bulletin $id"
-        return "${b.id}. ${b.from} ${stamp.format(Date(b.at * 1000))}\n${b.text}"
+        val head = "${b.id} - ${b.from} - ${b.title}"
+        return if (b.text.isBlank()) head else "$head\n${b.text}"
     }
 
+    /**
+     * `board post @title #body`.
+     *
+     * The markers are taken loosely: the @ is optional, a space after the # is optional, and
+     * a post with no # at all is stored as a title on its own, which is what a short note is
+     * anyway. A title long enough to crowd the listing is trimmed and the rest kept as the
+     * body, so nothing a sender typed is thrown away.
+     */
     private fun post(request: BbsRequest): String {
-        val body = Sanitize.body(request.args.trim().removePrefix("post").trim(), MAX_BULLETIN)
-        if (body.isBlank()) return "Nothing to post. board post <text>"
+        val raw = request.args.trim().removePrefix("post").trim().removePrefix("@").trim()
+        if (raw.isBlank()) return "Nothing to post. board post @title #body"
+
+        val split = bodyMarker(raw)
+        var title = Sanitize.line(if (split >= 0) raw.take(split) else raw, MAX_TITLE)
+        var body = Sanitize.body(if (split >= 0) raw.substring(split + 1) else "", MAX_BULLETIN)
+        if (title.length >= MAX_TITLE && split < 0) {
+            body = Sanitize.body(raw.drop(MAX_TITLE), MAX_BULLETIN)
+        }
+        title = title.trim().ifBlank { "untitled" }
+
         val sender = Sanitize.line(request.who(), 32)
         val recent = request.store.bulletinsBySenderSince(sender, (System.currentTimeMillis() / 1000) - 3600)
         if (recent >= BbsStore.MAX_BULLETINS_PER_SENDER_HOUR) {
             return "You have posted ${BbsStore.MAX_BULLETINS_PER_SENDER_HOUR} times this hour. Try later."
         }
-        val id = request.store.postBulletin(sender, body)
-        return "Posted as $id"
+        val id = request.store.postBulletin(sender, title, body.trim())
+        return "Posted as $id: $title"
     }
 
-    companion object { private const val MAX_BULLETIN = 500 }
+    /**
+     * Where the body starts, or -1 when the post is a title on its own.
+     *
+     * Only a # that begins a word counts, so a title like "C# notes #the body" splits at the
+     * second one and keeps the language name intact.
+     */
+    private fun bodyMarker(raw: String): Int {
+        raw.forEachIndexed { i, ch ->
+            if (ch == '#' && (i == 0 || raw[i - 1].isWhitespace())) return i
+        }
+        return -1
+    }
+
+    companion object {
+        private const val MAX_BULLETIN = 500
+        private const val MAX_TITLE = 40
+        private const val LIST_SIZE = 8
+    }
 }
 
 /**
@@ -171,7 +207,11 @@ class MailModule : BbsModule {
         val waiting = keys.flatMap { request.store.mailFor(it) }.distinctBy { it.id }
         if (waiting.isEmpty()) return "No mail waiting."
         val shown = waiting.take(3)
-        request.store.markDelivered(shown.map { it.id })
+        // Marked only once the reply has actually gone out. Marking here would lose the
+        // message whenever the send failed, and mail nobody received is worse than mail
+        // delivered twice.
+        val ids = shown.map { it.id }
+        request.onDelivered = { request.store.markDelivered(ids) }
         val rest = waiting.size - shown.size
         return shown.joinToString("\n") { "from ${it.from}: ${it.text}" } +
             if (rest > 0) "\n$rest more, send mail again" else ""
@@ -193,9 +233,13 @@ class MailModule : BbsModule {
  * The requirement can be relaxed in the BBS tab for a mesh with keys turned off, and the
  * setting says what that costs.
  */
-class AdminModule(private val requirePki: () -> Boolean) : BbsModule {
+class AdminModule(
+    private val requirePki: () -> Boolean,
+    private val locked: () -> Boolean,
+    private val setLocked: (Boolean) -> Unit
+) : BbsModule {
     override val keyword = "admin"
-    override val help = "admin status | admin clear board | admin clear mail | admin delete <n>"
+    override val help = "admin status | admin stop | admin start | admin clear board|mail|delivered | admin delete <n>"
 
     override suspend fun handle(request: BbsRequest): String? {
         // Never on a channel, whoever is asking: a channel is readable by everyone holding
@@ -212,8 +256,11 @@ class AdminModule(private val requirePki: () -> Boolean) : BbsModule {
 
         val words = request.words()
         return when (words.firstOrNull()?.lowercase()) {
-            null, "status" -> "Board ${request.store.bulletinCount()}, mail ${request.store.mailCount()} " +
+            null, "status" -> (if (locked()) "CLOSED. " else "") +
+                "Board ${request.store.bulletinCount()}, mail ${request.store.mailCount()} " +
                 "(${request.store.pendingMailCount()} waiting), admins ${request.store.adminCount()}"
+            "stop" -> { setLocked(true); "BBS closed. Only admins are answered until admin start." }
+            "start" -> { setLocked(false); "BBS open." }
             "clear" -> clear(request, words.getOrNull(1)?.lowercase())
             "delete" -> {
                 val id = words.getOrNull(1)?.toLongOrNull() ?: return "Which one? admin delete <n>"

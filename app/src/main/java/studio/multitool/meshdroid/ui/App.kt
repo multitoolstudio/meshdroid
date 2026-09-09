@@ -45,6 +45,8 @@ fun MeshdroidTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = scheme, content = content)
 }
 
+private const val BBS_SETTINGS_ROUTE = "bbs_settings"
+
 private enum class Tab(val route: String, val label: Int, val icon: ImageVector) {
     NODE("node", R.string.tab_node, Icons.Filled.Hub),
     CONFIG("config", R.string.tab_config, Icons.Filled.Description),
@@ -86,7 +88,12 @@ fun MeshdroidApp(
             composable(Tab.NODE.route) { NodeScreen(radioPresent, notificationsDenied, onStart, onStop, onRestart, onClose) }
             composable(Tab.CONFIG.route) { ConfigScreen(onRestart) }
             composable(Tab.MESH.route) { MeshScreen() }
-            composable(Tab.BBS.route) { BbsScreen() }
+            composable(Tab.BBS.route) {
+                BbsScreen(onOpenSettings = { nav.navigate(BBS_SETTINGS_ROUTE) })
+            }
+            // Reached from the BBS tab rather than the bottom bar: it is operator setup, not
+            // somewhere to land.
+            composable(BBS_SETTINGS_ROUTE) { BbsSettingsScreen(onBack = { nav.popBackStack() }) }
             composable(Tab.LOGS.route) { LogsScreen() }
         }
     }

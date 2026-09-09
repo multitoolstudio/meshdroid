@@ -211,6 +211,10 @@ object Settings {
     fun bbsAdminRequiresPki(ctx: Context) = prefs(ctx).getBoolean("bbs_admin_pki", true)
     fun setBbsAdminRequiresPki(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("bbs_admin_pki", v).apply()
 
+    /** Closed by an admin with "admin stop". Only admins are answered while this is set. */
+    fun bbsLocked(ctx: Context) = prefs(ctx).getBoolean("bbs_locked", false)
+    fun setBbsLocked(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("bbs_locked", v).apply()
+
     fun bbsCooldownSeconds(ctx: Context) = prefs(ctx).getInt("bbs_cooldown", 10)
     fun setBbsCooldownSeconds(ctx: Context, v: Int) = prefs(ctx).edit().putInt("bbs_cooldown", v).apply()
 
