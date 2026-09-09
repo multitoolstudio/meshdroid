@@ -24,9 +24,14 @@ android {
         applicationId = "studio.multitool.meshdroid"
         minSdk = 28
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.0.1"
         ndk { abiFilters += listOf("arm64-v8a") }
+
+        // Shown at the bottom of the Node tab. The commit is the one pinned in
+        // firmware/build-meshtasticd-android.sh as FW_COMMIT_DEFAULT; keep the two
+        // in step when the daemon is rebuilt against a newer firmware.
+        buildConfigField("String", "DAEMON_FIRMWARE_COMMIT", "\"fdb6730\"")
     }
 
     signingConfigs {
@@ -50,7 +55,7 @@ android {
             if (keystoreProps.isNotEmpty()) signingConfig = signingConfigs.getByName("release")
         }
     }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -69,5 +74,8 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.8.5")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.core:core-ktx:1.15.0")
+    // DaemonState and the service use coroutines directly, so the dependency is
+    // declared instead of inherited from the Compose and lifecycle artifacts.
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

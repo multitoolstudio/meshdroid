@@ -16,6 +16,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -26,6 +28,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,19 +37,40 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import studio.multitool.meshdroid.BuildConfig
 import studio.multitool.meshdroid.DaemonState
 import studio.multitool.meshdroid.NodeFiles
 import studio.multitool.meshdroid.NodeStatus
+import studio.multitool.meshdroid.R
 import studio.multitool.meshdroid.Settings
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/** Waits for the daemon to actually be gone. Used before anything replaces prefs/. */
+private suspend fun awaitStopped(): Boolean = withTimeoutOrNull(15_000) {
+    withContext(Dispatchers.Default) {
+        DaemonState.status.first { it == NodeStatus.STOPPED || it == NodeStatus.ERROR }
+    }
+} != null
+
 @Composable
-fun NodeScreen(radioPresent: Boolean, onStart: () -> Unit, onStop: () -> Unit, onRestart: () -> Unit, onClose: () -> Unit) {
+fun NodeScreen(
+    radioPresent: Boolean,
+    notificationsDenied: Boolean,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onRestart: () -> Unit,
+    onClose: () -> Unit
+) {
     val ctx = LocalContext.current
     val status by DaemonState.status.collectAsStateWithLifecycle()
     val detail by DaemonState.detail.collectAsStateWithLifecycle()
@@ -54,38 +78,70 @@ fun NodeScreen(radioPresent: Boolean, onStart: () -> Unit, onStop: () -> Unit, o
     val firmware by DaemonState.firmware.collectAsStateWithLifecycle()
     val serial by DaemonState.radioSerial.collectAsStateWithLifecycle()
     val regionUnset by DaemonState.regionUnset.collectAsStateWithLifecycle()
+    val configVersion by NodeFiles.configVersion.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    val running = status == NodeStatus.RUNNING || status == NodeStatus.STARTING
+    val running = status == NodeStatus.RUNNING || status == NodeStatus.STARTING || status == NodeStatus.STOPPING
 
-    var lan by remember { mutableStateOf(Settings.lanEnabled(ctx)) }
-    var autoStart by remember { mutableStateOf(Settings.autoStart(ctx)) }
+    var lan by remember { mutableStateOf(false) }
+    var autoStart by remember { mutableStateOf(true) }
     var confirmReset by remember { mutableStateOf(false) }
-    var region by remember { mutableStateOf(NodeFiles.readRegion(ctx)) }
+    var region by remember { mutableStateOf<String?>(null) }
     var regionMenu by remember { mutableStateOf(false) }
     var askRegion by remember { mutableStateOf(false) }
+    var pendingRestore by remember { mutableStateOf<android.net.Uri?>(null) }
+
+    // Settings and config.yaml are read off the main thread, and the region is read
+    // again whenever config.yaml changes (an import, a restore, or the Config tab).
+    LaunchedEffect(Unit) {
+        val values = withContext(Dispatchers.IO) { Settings.lanEnabled(ctx) to Settings.autoStart(ctx) }
+        lan = values.first; autoStart = values.second
+    }
+    LaunchedEffect(configVersion) {
+        region = withContext(Dispatchers.IO) { runCatching { NodeFiles.readRegion(ctx) }.getOrNull() }
+    }
+
     // Ask once per session when the daemon reports the region as unset and the YAML
     // has no Region key either. Dismissing with "Later" does not ask again until
     // the node is restarted.
-    androidx.compose.runtime.LaunchedEffect(regionUnset) { if (regionUnset && region == null) askRegion = true }
+    LaunchedEffect(regionUnset, region) { if (regionUnset && region == null) askRegion = true }
 
     fun applyRegion(code: String) {
-        NodeFiles.writeRegion(ctx, code); region = code; regionMenu = false; askRegion = false
-        if (running) onRestart() else scope.launch { snackbar.showSnackbar("Region $code saved. Applied on next start.") }
+        regionMenu = false; askRegion = false
+        scope.launch {
+            withContext(Dispatchers.IO) { NodeFiles.writeRegion(ctx, code) }
+            region = code
+            if (running) onRestart() else snackbar.showSnackbar(ctx.getString(R.string.snack_region_saved, code))
+        }
     }
 
-    val stamp = remember { SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date()) }
     val exportBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
-        uri?.let { runCatching { NodeFiles.exportBackup(ctx, it) }
-            .onSuccess { scope.launch { snackbar.showSnackbar("Backup saved") } }
-            .onFailure { e -> scope.launch { snackbar.showSnackbar("Backup failed: ${e.message}") } } }
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            runCatching { withContext(Dispatchers.IO) { NodeFiles.exportBackup(ctx, uri) } }
+                .onSuccess { snackbar.showSnackbar(ctx.getString(R.string.snack_backup_saved)) }
+                .onFailure { e -> snackbar.showSnackbar(ctx.getString(R.string.snack_backup_failed, e.message ?: "")) }
+        }
     }
-    val importBackup = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let {
+    val pickBackup = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) pendingRestore = uri
+    }
+
+    /**
+     * Stops the node, waits for the process to exit, then replaces the files. Doing
+     * it in that order keeps the daemon from writing prefs/ underneath the restore.
+     */
+    fun runRestore(uri: android.net.Uri) {
+        scope.launch {
+            snackbar.showSnackbar(ctx.getString(R.string.snack_restoring))
             onStop()
-            runCatching { NodeFiles.importBackup(ctx, it) }
-                .onSuccess { n -> scope.launch { snackbar.showSnackbar("Restored $n files. Start the node to apply.") } }
-                .onFailure { e -> scope.launch { snackbar.showSnackbar("Restore failed: ${e.message}") } }
+            if (!awaitStopped()) {
+                snackbar.showSnackbar(ctx.getString(R.string.snack_restore_failed, "the node did not stop"))
+                return@launch
+            }
+            runCatching { withContext(Dispatchers.IO) { NodeFiles.importBackup(ctx, uri) } }
+                .onSuccess { n -> snackbar.showSnackbar(ctx.getString(R.string.snack_restored, n)) }
+                .onFailure { e -> snackbar.showSnackbar(ctx.getString(R.string.snack_restore_failed, e.message ?: "")) }
         }
     }
 
@@ -93,38 +149,45 @@ fun NodeScreen(radioPresent: Boolean, onStart: () -> Unit, onStop: () -> Unit, o
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
-                    when (status) {
-                        NodeStatus.STOPPED -> "Node stopped"
-                        NodeStatus.STARTING -> "Starting…"
-                        NodeStatus.RUNNING -> "Node running"
-                        NodeStatus.ERROR -> "Node error"
-                    },
+                    stringResource(when (status) {
+                        NodeStatus.STOPPED -> R.string.status_stopped
+                        NodeStatus.STARTING -> R.string.status_starting
+                        NodeStatus.RUNNING -> R.string.status_running
+                        NodeStatus.STOPPING -> R.string.status_stopping
+                        NodeStatus.ERROR -> R.string.status_error
+                    }),
                     style = MaterialTheme.typography.headlineSmall,
                     color = if (status == NodeStatus.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
                 )
                 Text(detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (nodeId != null || firmware != null || serial != null) {
                     Spacer(Modifier.height(6.dp))
-                    nodeId?.let { Text("Node ID  $it", style = MaterialTheme.typography.bodyMedium) }
-                    firmware?.let { Text("Firmware  $it", style = MaterialTheme.typography.bodyMedium) }
-                    serial?.let { Text("Radio serial  $it", style = MaterialTheme.typography.bodyMedium) }
+                    nodeId?.let { Text(stringResource(R.string.label_node_id, it), style = MaterialTheme.typography.bodyMedium) }
+                    firmware?.let { Text(stringResource(R.string.label_firmware, it), style = MaterialTheme.typography.bodyMedium) }
+                    serial?.let { Text(stringResource(R.string.label_radio_serial, it), style = MaterialTheme.typography.bodyMedium) }
                 }
                 if (regionUnset && running) {
                     Spacer(Modifier.height(6.dp))
-                    Text("LoRa region not set. The node won't transmit or create its identity keys until it is. " +
-                        "Pick one below.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                    Text(stringResource(R.string.hint_region_unset),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
                 }
                 if (!radioPresent && !running) {
                     Spacer(Modifier.height(6.dp))
-                    Text("Plug a CH341 LoRa dongle into the USB-C port.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.hint_plug_radio),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (notificationsDenied) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(stringResource(R.string.hint_notifications_denied),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
                 }
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (running) {
-                        Button(onClick = onStop) { Text("Stop") }
-                        OutlinedButton(onClick = onRestart) { Text("Restart") }
+                        Button(onClick = onStop) { Text(stringResource(R.string.btn_stop)) }
+                        OutlinedButton(onClick = onRestart) { Text(stringResource(R.string.btn_restart)) }
                     } else {
-                        Button(onClick = onStart, enabled = radioPresent) { Text("Start node") }
+                        Button(onClick = onStart, enabled = radioPresent) { Text(stringResource(R.string.btn_start)) }
                     }
                 }
             }
@@ -133,15 +196,16 @@ fun NodeScreen(radioPresent: Boolean, onStart: () -> Unit, onStop: () -> Unit, o
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(vertical = 8.dp)) {
                 ListItem(
-                    headlineContent = { Text("LoRa region") },
-                    supportingContent = { Text(if (region == null) "Not set. Required before the node can transmit."
-                        else "$region. Seeds a new node; later changes from the Meshtastic app take precedence.") },
+                    headlineContent = { Text(stringResource(R.string.item_region)) },
+                    supportingContent = {
+                        Text(region?.let { stringResource(R.string.item_region_set, it) } ?: stringResource(R.string.item_region_unset))
+                    },
                     trailingContent = {
                         Column {
-                            OutlinedButton(onClick = { regionMenu = true }) { Text(region ?: "Choose") }
-                            androidx.compose.material3.DropdownMenu(expanded = regionMenu, onDismissRequest = { regionMenu = false }) {
+                            OutlinedButton(onClick = { regionMenu = true }) { Text(region ?: stringResource(R.string.btn_choose)) }
+                            DropdownMenu(expanded = regionMenu, onDismissRequest = { regionMenu = false }) {
                                 NodeFiles.regions.forEach { code ->
-                                    androidx.compose.material3.DropdownMenuItem(text = { Text(code) }, onClick = { applyRegion(code) })
+                                    DropdownMenuItem(text = { Text(code) }, onClick = { applyRegion(code) })
                                 }
                             }
                         }
@@ -149,46 +213,71 @@ fun NodeScreen(radioPresent: Boolean, onStart: () -> Unit, onStop: () -> Unit, o
                 )
                 HorizontalDivider()
                 ListItem(
-                    headlineContent = { Text("Meshtastic app connection") },
-                    supportingContent = { Text("Network → 127.0.0.1, port ${Settings.API_PORT}") }
+                    headlineContent = { Text(stringResource(R.string.item_connection)) },
+                    supportingContent = { Text(stringResource(R.string.item_connection_detail, Settings.API_PORT)) }
                 )
                 HorizontalDivider()
                 ListItem(
-                    headlineContent = { Text("Allow LAN access") },
-                    supportingContent = { Text(if (lan) "Other devices on Wi-Fi can connect and reconfigure this node." else "API reachable only from this phone. Recommended.") },
+                    headlineContent = { Text(stringResource(R.string.item_lan)) },
+                    supportingContent = { Text(stringResource(if (lan) R.string.item_lan_on else R.string.item_lan_off)) },
                     trailingContent = {
-                        Switch(checked = lan, onCheckedChange = { v -> lan = v; Settings.setLanEnabled(ctx, v)
-                            if (running) scope.launch { snackbar.showSnackbar("Restart the node to apply") } })
+                        Switch(checked = lan, onCheckedChange = { v ->
+                            lan = v
+                            scope.launch {
+                                withContext(Dispatchers.IO) { Settings.setLanEnabled(ctx, v) }
+                                if (running) snackbar.showSnackbar(ctx.getString(R.string.snack_restart_to_apply))
+                            }
+                        })
                     }
                 )
                 HorizontalDivider()
                 ListItem(
-                    headlineContent = { Text("Start when radio is plugged in") },
-                    trailingContent = { Switch(checked = autoStart, onCheckedChange = { v -> autoStart = v; Settings.setAutoStart(ctx, v) }) }
+                    headlineContent = { Text(stringResource(R.string.item_autostart)) },
+                    trailingContent = {
+                        Switch(checked = autoStart, onCheckedChange = { v ->
+                            autoStart = v
+                            scope.launch { withContext(Dispatchers.IO) { Settings.setAutoStart(ctx, v) } }
+                        })
+                    }
                 )
             }
         }
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(vertical = 8.dp)) {
-                ListItem(headlineContent = { Text("Node files") },
-                    supportingContent = { Text("config.yaml plus the node database, keys and channels (prefs/).") })
+                ListItem(headlineContent = { Text(stringResource(R.string.item_files)) },
+                    supportingContent = { Text(stringResource(R.string.item_files_detail)) })
                 Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { exportBackup.launch("meshdroid-backup-$stamp.zip") }) { Text("Back up") }
-                    OutlinedButton(onClick = { importBackup.launch(arrayOf("application/zip", "application/octet-stream")) }) { Text("Restore") }
+                    OutlinedButton(onClick = {
+                        val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
+                        exportBackup.launch("meshdroid-backup-$stamp.zip")
+                    }) { Text(stringResource(R.string.btn_backup)) }
+                    OutlinedButton(onClick = { pickBackup.launch(arrayOf("application/zip", "application/octet-stream")) }) {
+                        Text(stringResource(R.string.btn_restore))
+                    }
                     Spacer(Modifier.width(4.dp))
-                    TextButton(onClick = { confirmReset = true }, enabled = !running) { Text("Reset identity") }
+                    TextButton(onClick = { confirmReset = true }, enabled = !running) { Text(stringResource(R.string.btn_reset)) }
                 }
             }
         }
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(vertical = 8.dp)) {
-                ListItem(headlineContent = { Text("Close Meshdroid") },
-                    supportingContent = { Text("Stops the node and quits the app. Stop/Restart above only affect the meshtasticd process.") })
+                ListItem(headlineContent = { Text(stringResource(R.string.item_close)) },
+                    supportingContent = { Text(stringResource(R.string.item_close_detail)) })
                 Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    OutlinedButton(onClick = onClose) { Text("Close Meshdroid") }
+                    OutlinedButton(onClick = onClose) { Text(stringResource(R.string.btn_close)) }
                 }
             }
+        }
+        // Version footer. The firmware line names the commit the bundled daemon was
+        // built from; once the node is running, the status card shows the version
+        // the daemon itself reports.
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(stringResource(R.string.version_line, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(stringResource(R.string.version_daemon, BuildConfig.DAEMON_FIRMWARE_COMMIT),
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Spacer(Modifier.height(40.dp))
     }
@@ -199,10 +288,10 @@ fun NodeScreen(radioPresent: Boolean, onStart: () -> Unit, onStop: () -> Unit, o
 
     if (askRegion) AlertDialog(
         onDismissRequest = { askRegion = false },
-        title = { Text("Set your LoRa region") },
+        title = { Text(stringResource(R.string.dialog_region_title)) },
         text = {
             Column {
-                Text("The node has no region yet, so it can't transmit or create its identity keys. Choose the region you're in:")
+                Text(stringResource(R.string.dialog_region_text))
                 Spacer(Modifier.height(12.dp))
                 Column(Modifier.height(240.dp).verticalScroll(rememberScrollState())) {
                     NodeFiles.regions.forEach { code ->
@@ -212,15 +301,32 @@ fun NodeScreen(radioPresent: Boolean, onStart: () -> Unit, onStop: () -> Unit, o
             }
         },
         confirmButton = {},
-        dismissButton = { TextButton(onClick = { askRegion = false }) { Text("Later") } }
+        dismissButton = { TextButton(onClick = { askRegion = false }) { Text(stringResource(R.string.btn_later)) } }
     )
+
+    pendingRestore?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { pendingRestore = null },
+            title = { Text(stringResource(R.string.dialog_restore_title)) },
+            text = { Text(stringResource(R.string.dialog_restore_text)) },
+            confirmButton = { TextButton(onClick = { pendingRestore = null; runRestore(uri) }) { Text(stringResource(R.string.btn_restore_confirm)) } },
+            dismissButton = { TextButton(onClick = { pendingRestore = null }) { Text(stringResource(R.string.btn_cancel)) } }
+        )
+    }
 
     if (confirmReset) AlertDialog(
         onDismissRequest = { confirmReset = false },
-        title = { Text("Reset node identity?") },
-        text = { Text("Deletes the node database, channels and keys. The node gets a new keypair on next start. config.yaml is kept.") },
-        confirmButton = { TextButton(onClick = { NodeFiles.resetNode(ctx); confirmReset = false
-            scope.launch { snackbar.showSnackbar("Node data cleared") } }) { Text("Reset") } },
-        dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("Cancel") } }
+        title = { Text(stringResource(R.string.dialog_reset_title)) },
+        text = { Text(stringResource(R.string.dialog_reset_text)) },
+        confirmButton = {
+            TextButton(onClick = {
+                confirmReset = false
+                scope.launch {
+                    withContext(Dispatchers.IO) { NodeFiles.resetNode(ctx) }
+                    snackbar.showSnackbar(ctx.getString(R.string.snack_reset_done))
+                }
+            }) { Text(stringResource(R.string.btn_reset_confirm)) }
+        },
+        dismissButton = { TextButton(onClick = { confirmReset = false }) { Text(stringResource(R.string.btn_cancel)) } }
     )
 }

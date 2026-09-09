@@ -60,8 +60,10 @@ instead of glibc.
 
 ## The patches
 
-All three are applied by `build-meshtasticd-android.sh` and are idempotent;
-the script checks for a marker string before applying each one.
+All four are applied by `build-meshtasticd-android.sh` and are idempotent; the
+script checks for a marker string before applying each one, and fails if a
+marker is still missing afterwards. 0004 appends to the function 0003 adds, so
+they are applied in order.
 
 ### 0001: libch341-spi-userspace, receive the USB fd from the app
 
@@ -86,6 +88,15 @@ This is the PlatformIO package cache, shared by every env built on the
 machine, so the change is visible to other native builds on the same host. It
 is inert unless the environment variable is set.
 
+Living in the package cache has two consequences worth knowing about. A
+`pio pkg update` reverts it, and a clean machine that skips the patch produces a
+daemon that ignores `MESHTASTICD_BIND_ADDR` and binds every interface however the
+app's LAN switch is set. Three things guard against shipping that binary: the
+build script treats a missing patch as fatal rather than a warning, it greps the
+finished binary for the `API server binding` string before installing it into the
+app, and `DaemonService` warns in the log if a running daemon never reports a bind
+address.
+
 `WiFiServer::begin()` binds to `INADDR_ANY`. The patch reads
 `MESHTASTICD_BIND_ADDR`; if it holds a valid IPv4 address the server binds to
 that instead. It then logs `API server binding <addr>:<port>` to stderr.
@@ -106,17 +117,40 @@ runs the same key generation path the admin module uses, re-initialises the
 radio and persists the result. If the node already has a region the key is
 ignored, so later changes made from the Meshtastic app are never overridden.
 
+Applying a region also sets `tx_enabled`. That only ever runs on a node whose
+region is `UNSET`, which is a node that has never transmitted, so no setting a
+user chose is overridden by it.
+
+### 0004: firmware, clean shutdown on SIGTERM
+
+Target: `src/main.cpp`, `src/platform/portduino/PortduinoGlue.cpp` in the
+firmware checkout.
+
+Portduino installs no signal handlers, so the default action for SIGTERM ends
+the process wherever it happens to be, including part way through writing
+`config.proto` or `nodes.proto`. The patch adds a handler that records the
+signal, and a `portduinoCheckShutdown()` call at the top of `loop()` that saves
+the node database and exits when it sees one. The handler is installed on the
+first call, so nothing in `setup()` has to change.
+
+SIGINT is deliberately left alone. `WiFiServer::write()` raises it when the
+unimplemented `Print` path is reached, and that has to stay a visible crash.
+
+`DaemonService` sends SIGTERM and waits before falling back to SIGKILL, which is
+what `Process.destroy()` does on Android. Without this patch that wait accomplishes
+nothing: an unhandled SIGTERM is as abrupt as a kill.
+
 ## The app
 
 Kotlin, Jetpack Compose, Material 3. One module, no dependency injection.
 
 | File | Role |
 |---|---|
-| `MainActivity.kt` | Finds the CH341 device, requests USB permission, handles the `USB_DEVICE_ATTACHED` launch intent, hosts the Compose UI. |
-| `DaemonService.kt` | Foreground service that owns the daemon process: opens USB, holds a wake lock, starts the fd socket, launches the binary, streams its stdout, tears down cleanly. Kills orphaned daemons from a crashed earlier run and checks that port 4403 is free before starting. |
-| `UsbFdServer.kt` | The abstract Unix socket that hands the USB descriptor to the daemon. |
-| `DaemonState.kt` | Shared state: node status, a capped log buffer, values parsed from the log (node ID, firmware, serial, region unset). `Settings` holds the persisted switches. |
-| `NodeFiles.kt` | Paths, `config.yaml` read and write, the `Lora.Region` key, presets, backup and restore zips, log export, identity reset. |
+| `MainActivity.kt` | Finds the CH341 device, requests USB permission, handles the `USB_DEVICE_ATTACHED` launch intent, hosts the Compose UI. Start, Stop, Restart and Close are requests to the service. |
+| `DaemonService.kt` | Foreground service that owns the daemon process: opens USB, holds a wake lock, starts the fd socket, launches the binary, streams its stdout, tears down cleanly. Signals orphaned daemons from a crashed earlier run and waits for port 4403 before starting. Every transition runs on its own control thread. |
+| `UsbFdServer.kt` | The abstract Unix socket that hands the USB descriptor to the daemon, after checking that the peer is this app. |
+| `DaemonState.kt` | Shared state: node status, a coalesced log buffer, values parsed from the log (node ID, firmware, serial, bind address, region unset). `Settings` holds the persisted switches. |
+| `NodeFiles.kt` | Paths, `config.yaml` read and write, the `Lora.Region` key, presets, backup and restore zips, log export, identity reset. All of it blocking, all of it called from a background dispatcher. |
 | `ui/App.kt` | Theme and the three-tab scaffold. |
 | `ui/NodeScreen.kt`, `ui/ConfigScreen.kt`, `ui/LogsScreen.kt` | The tabs. |
 
@@ -124,6 +158,34 @@ Process model: the daemon is a separate OS process, so a crash inside it
 cannot take the app down, and the app can restart it. The service runs in the
 app's process. The daemon's stdout is read on a dedicated thread and appended
 to `DaemonState.log`; the Logs tab observes that flow.
+
+## Lifecycle
+
+Start, stop and restart are intents to `DaemonService`, which posts each one to a
+single "daemon-control" thread. Serialising them there is what makes a restart
+safe: the teardown finishes before the next start begins, instead of racing it on
+a timer. `onStartCommand` itself only calls `startForeground` and returns, so none
+of the blocking work (scanning `/proc`, waiting for the port, opening USB,
+`ProcessBuilder.start`) happens on the main thread.
+
+Two ownership details matter:
+
+- The `ParcelFileDescriptor` returned by `ParcelFileDescriptor.fromFd` owns the
+  duplicate of the usbfs descriptor that the daemon receives. It is held in a
+  field for the life of the session and closed after the fd server stops. If it
+  became unreachable its finalizer would close the descriptor underneath a
+  running daemon, and the next CH341 recovery attempt would get a dead fd.
+- `UsbFdServer` checks `SO_PEERCRED` on every connection and only sends the
+  descriptor to this app's own UID. The abstract socket namespace is not scoped
+  to an app, so the name alone is not a secret.
+
+Stopping sends SIGTERM, waits, then falls back to `Process.destroy()`, which is a
+SIGKILL. Anything that replaces files under `prefs/`, meaning Restore and Reset
+identity, waits for the status to reach `Stopped` first.
+
+The node is not restarted automatically after a crash or a reboot. The phone is
+the radio's host and a start needs a USB device the user has plugged in, so
+`onStartCommand` returns `START_NOT_STICKY`.
 
 ## File layout on the phone
 

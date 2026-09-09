@@ -1,0 +1,83 @@
+diff --git a/src/main.cpp b/src/main.cpp
+index eb0726c..b2c41a9 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -1393,7 +1393,11 @@ void loop()
+ #ifndef PIO_UNIT_TESTING
+ void loop()
+ {
+     runASAP = false;
++
++#if defined(ARCH_PORTDUINO) && !defined(ARCH_PORTDUINO_WASM)
++    portduinoCheckShutdown(); // SIGTERM from the host: save the node data, then exit
++#endif
+ 
+     // The single writer of the monotonic wrap carry; every other caller only reads it.
+     Time::serviceMonotonic();
+diff --git a/src/platform/portduino/PortduinoGlue.cpp b/src/platform/portduino/PortduinoGlue.cpp
+index f149607..a71b3d8 100644
+--- a/src/platform/portduino/PortduinoGlue.cpp
++++ b/src/platform/portduino/PortduinoGlue.cpp
+@@ -15,5 +15,6 @@
+ #include "meshUtils.h"
+ #include <strings.h>            // strcasecmp
++#include <csignal>              // portduinoCheckShutdown
+ #include <ErriezCRC32.h>
+ #include <Utility.h>
+ #include <assert.h>
+@@ -1435,4 +1436,43 @@
+     initRegion();
+     if (service)
+         service->reloadConfig(changes);
+ }
++
++// Clean shutdown for hosts that stop the daemon with a signal: Meshdroid's Stop
++// and Restart, and systemd on Linux. Portduino installs no handler, so the default
++// action ends the process wherever it happens to be, including part way through
++// writing prefs. The handler only records the signal; the save runs from loop(),
++// where nothing else is touching those files.
++//
++// SIGINT is left alone on purpose. WiFiServer::write() raises it when the
++// unimplemented Print path is reached, and that has to stay a visible crash
++// rather than look like a clean exit.
++static volatile sig_atomic_t portduinoShutdownSignal = 0;
++
++static void portduinoShutdownHandler(int sig)
++{
++    portduinoShutdownSignal = sig;
++}
++
++void portduinoInstallShutdownHandler()
++{
++    struct sigaction sa = {};
++    sa.sa_handler = portduinoShutdownHandler;
++    sigemptyset(&sa.sa_mask);
++    sigaction(SIGTERM, &sa, NULL);
++}
++
++void portduinoCheckShutdown()
++{
++    static bool installed = false;
++    if (!installed) {
++        portduinoInstallShutdownHandler();
++        installed = true;
++    }
++    if (!portduinoShutdownSignal)
++        return;
++    LOG_INFO("Signal %d received, saving node data and exiting", (int)portduinoShutdownSignal);
++    if (nodeDB)
++        nodeDB->saveToDisk();
++    exit(0);
++}
+diff --git a/src/platform/portduino/PortduinoGlue.h b/src/platform/portduino/PortduinoGlue.h
+index 17d930a..c33b1f1 100644
+--- a/src/platform/portduino/PortduinoGlue.h
++++ b/src/platform/portduino/PortduinoGlue.h
+@@ -70,4 +70,7 @@
+ bool loadConfig(const char *configPath);
+ static bool ends_with(std::string_view str, std::string_view suffix);
+ void getMacAddr(uint8_t *dmac);
++/** Installs the SIGTERM handler on first call, then saves and exits once it fires. */
++void portduinoCheckShutdown();
++void portduinoInstallShutdownHandler();
+ bool MAC_from_string(std::string mac_str, uint8_t *dmac);

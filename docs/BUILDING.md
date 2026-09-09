@@ -182,18 +182,36 @@ git clone https://github.com/meshtastic/firmware.git ~/meshtastic-firmware
 ./build-meshtasticd-android.sh ~/meshtastic-firmware
 ```
 
-The firmware checkout is not pinned; the script builds whatever `master` is
-at the time. Meshdroid 1.0.0 was built and tested against firmware 2.8.1
-(commit `fdb6730`). To reproduce that build exactly, check out that commit
-before running the script: `git -C ~/meshtastic-firmware checkout fdb6730`.
+The script pins the firmware commit. `FW_COMMIT_DEFAULT` at the top of
+`build-meshtasticd-android.sh` names it, and the script checks that commit out
+before building, so two people running the same script get the same daemon.
+Meshdroid 1.0.1 builds against firmware 2.8.1, commit `fdb6730`.
+
+To try a different commit, or the checkout as it stands:
+
+```bash
+FW_COMMIT=abc1234 ./build-meshtasticd-android.sh ~/meshtastic-firmware
+FW_COMMIT=keep    ./build-meshtasticd-android.sh ~/meshtastic-firmware
+```
+
+When a newer firmware is adopted, change `FW_COMMIT_DEFAULT`, rebuild, test on
+a phone and record the hash in `CHANGELOG.md`.
 
 The script copies the Android env, variant and compat headers into the
 firmware checkout, installs the firmware's PlatformIO packages, applies the
-three patches (see [ARCHITECTURE.md](ARCHITECTURE.md)), exports the NDK
+four patches (see [ARCHITECTURE.md](ARCHITECTURE.md)), exports the NDK
 toolchain through the `TARGET_*` variables, runs `pio run -e android-arm64`,
-and strips the result into `app/src/main/jniLibs/arm64-v8a/libmeshtasticd.so`
-next to the NDK's `libc++_shared.so`. The first build takes a few minutes;
-later builds only recompile what changed.
+checks that the finished binary carries the strings the app parses, and strips
+the result into `app/src/main/jniLibs/arm64-v8a/libmeshtasticd.so` next to the
+NDK's `libc++_shared.so`. The first build takes a few minutes; later builds
+only recompile what changed.
+
+Two of those checks are worth knowing about. Patch 0002 lives in the shared
+PlatformIO package cache, which `pio pkg update` reverts, so the script stops
+with an error if the shim is unpatched rather than producing a daemon that
+ignores the LAN switch. It then greps the built binary for `API server binding`
+and `Using pre-opened CH341 fd`, which catches a stale object file from a build
+made before a patch was applied.
 
 At the end it prints the binary's `NEEDED` list. Expected:
 
@@ -236,6 +254,13 @@ Open the repository root (the directory containing `settings.gradle.kts`) in
 Android Studio. File > Sync Project with Gradle Files; the first sync downloads
 Gradle, the Android Gradle Plugin and the Compose libraries. Then Run with the
 phone selected.
+
+The Gradle wrapper is in the repository, so a build without Studio works too:
+
+```bash
+./gradlew assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
 
 Studio may offer to upgrade the Android Gradle Plugin. Decline; the versions
 in `build.gradle.kts` are a tested pair. The "deprecated Gradle features"
@@ -288,3 +313,16 @@ Recorded here because each one cost a build cycle.
 - **Firmware 2.8 defers key generation until a region is set.** A fresh node
   with no region never writes `config.proto`. Patch 0003 and the app's region
   picker exist for this.
+- **`ParcelFileDescriptor` closes its descriptor from its finalizer.** A PFD
+  left in a local goes out of scope as soon as the method returns, and the
+  garbage collector then closes the usbfs descriptor while the daemon is still
+  using it. It has to be held in a field for the life of the session.
+- **The abstract socket namespace is not scoped to an app.** Any process on the
+  phone can connect to `@meshdroid-usbfd-...` and be handed the radio, so the fd
+  server checks `SO_PEERCRED` before it sends anything.
+- **`Process.destroy()` on Android is SIGKILL**, which is where exit code 137
+  comes from, and portduino installs no signal handlers of its own. Patch 0004
+  adds a SIGTERM handler so that a stop can flush the node database first.
+- **`pio pkg update` reverts patch 0002.** It lives in the package cache, not in
+  the firmware tree. The build script checks for it and refuses to build without
+  it.

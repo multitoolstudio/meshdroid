@@ -1,11 +1,28 @@
-.gradle/
-build/
-local.properties
-.idea/
-*.iml
+# Built daemon and its runtime, produced by firmware/build-meshtasticd-android.sh
+app/src/main/jniLibs/arm64-v8a/*.so
+
+# Cross-built dependencies and their sources
 firmware/android-prefix/
 firmware/deps-src/
+
+# Signing material. Never commit these.
 keystore.properties
 *.jks
+*.keystore
+
+# Gradle and Android Studio state. gradle/wrapper/gradle-wrapper.jar is committed
+# on purpose so that a fresh clone can run ./gradlew.
+.gradle/
+build/
+app/build/
+local.properties
+captures/
+.idea/
+*.iml
+
+# Editors and desktops
+.vscode/
+.DS_Store
+
+# Signed release APKs from Android Studio
 app/release/
-app/src/main/jniLibs/arm64-v8a/*.so

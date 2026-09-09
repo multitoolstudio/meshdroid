@@ -1,5 +1,6 @@
 <resources>
-    <!-- Compose draws everything; the framework theme only needs to be edge-to-edge friendly. -->
+    <!-- Compose draws everything; the framework theme only needs to be edge-to-edge
+         friendly. Light status bar icons are set here and overridden in values-night. -->
     <style name="Theme.Meshdroid" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:statusBarColor">@android:color/transparent</item>

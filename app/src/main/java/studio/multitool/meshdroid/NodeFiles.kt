@@ -2,7 +2,10 @@ package studio.multitool.meshdroid
 
 import android.content.Context
 import android.net.Uri
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import java.io.File
+import java.io.FileOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -19,43 +22,109 @@ import java.util.zip.ZipOutputStream
  * in or out: the Config tab edits the YAML, and backups move through the system
  * file picker (Storage Access Framework), which reaches Downloads, Drive, USB
  * storage and anything else that provides documents.
+ *
+ * Every method here blocks on disk I/O and is meant to be called from a
+ * background dispatcher, never from a composable or a lifecycle callback.
  */
 object NodeFiles {
     fun configFile(ctx: Context) = File(ctx.filesDir, "config.yaml")
     fun fsDir(ctx: Context) = File(ctx.filesDir, "meshtasticd").apply { mkdirs() }
     fun prefsDir(ctx: Context) = File(fsDir(ctx), "prefs")
 
+    /**
+     * Bumped whenever config.yaml changes on disk. The Config tab watches this so
+     * that a region set from the Node tab, an import or a restore does not leave a
+     * stale copy in the editor that a later Save would write back.
+     */
+    private val _configVersion = MutableStateFlow(0)
+    val configVersion: StateFlow<Int> = _configVersion
+
+    /** Largest backup zip and single entry accepted by importBackup. */
+    private const val MAX_ENTRY_BYTES = 16L * 1024 * 1024
+    private const val MAX_TOTAL_BYTES = 128L * 1024 * 1024
+
     fun ensureDefaultConfig(ctx: Context) {
         val f = configFile(ctx)
-        if (!f.exists()) ctx.assets.open("config.yaml").use { it.copyTo(f.outputStream()) }
+        if (f.exists()) return
+        val bytes = ctx.assets.open("config.yaml").use { it.readBytes() }
+        writeAtomically(f, bytes)
+        _configVersion.value++
     }
 
     fun readConfig(ctx: Context): String { ensureDefaultConfig(ctx); return configFile(ctx).readText() }
-    fun writeConfig(ctx: Context, text: String) = configFile(ctx).writeText(text)
+
+    fun writeConfig(ctx: Context, text: String) {
+        writeAtomically(configFile(ctx), text.toByteArray())
+        _configVersion.value++
+    }
+
+    /**
+     * Writes through a temporary file in the same directory and renames it over the
+     * target, so an interrupted write cannot leave a truncated config.yaml behind.
+     */
+    private fun writeAtomically(target: File, bytes: ByteArray) {
+        target.parentFile?.mkdirs()
+        val tmp = File(target.parentFile, target.name + ".tmp")
+        FileOutputStream(tmp).use { out ->
+            out.write(bytes)
+            out.flush()
+            out.fd.sync()
+        }
+        if (!tmp.renameTo(target)) {
+            tmp.delete()
+            throw java.io.IOException("could not replace ${target.name}")
+        }
+    }
 
     // ---- Lora.Region in config.yaml ----
     // Read by the daemon at boot (firmware patch 0003) and applied only while the
     // stored config has no region. A commented-out "# Region:" line does not match.
-    private val regionLine = Regex("""(?m)^[ \t]+Region:[ \t]*([A-Za-z0-9_]*)[ \t]*(#.*)?$""")
+    // The search is confined to the Lora block so that a Region key added elsewhere
+    // in config.yaml by a later firmware is left alone.
+    private val regionLine = Regex("""(?m)^([ \t]+)Region:[ \t]*([A-Za-z0-9_]*)[ \t]*(#.*)?$""")
+    private val loraHeader = Regex("""(?m)^Lora:[ \t]*(#.*)?$""")
+    private val topLevelKey = Regex("""(?m)^[A-Za-z_][A-Za-z0-9_]*:""")
 
-    fun readRegion(ctx: Context): String? = regionLine.find(readConfig(ctx))?.groupValues?.get(1)?.ifBlank { null }
+    /** Character range of the Lora block's body, or null if the file has no Lora block. */
+    private fun loraBody(text: String): IntRange? {
+        val header = loraHeader.find(text) ?: return null
+        val bodyStart = header.range.last + 1
+        val next = topLevelKey.find(text, bodyStart)
+        return bodyStart until (next?.range?.first ?: text.length)
+    }
+
+    fun readRegion(ctx: Context): String? {
+        val text = readConfig(ctx)
+        val body = loraBody(text) ?: return null
+        return regionLine.find(text.substring(body))?.groupValues?.get(2)?.ifBlank { null }
+    }
 
     /**
-     * Sets the Region key, replacing an existing one or inserting it directly under
-     * the `Lora:` header. If the file has no `Lora:` section one is prepended.
-     * Returns the new file text.
+     * Sets the Region key inside the Lora block, replacing an existing one and
+     * keeping its indentation, or inserting it directly under the `Lora:` header.
+     * If the file has no `Lora:` section one is prepended. Returns the new file text.
      */
     fun writeRegion(ctx: Context, code: String): String {
-        var text = readConfig(ctx)
-        text = if (regionLine.containsMatchIn(text)) {
-            regionLine.replace(text, "  Region: $code")
-        } else {
-            val loraHeader = Regex("""(?m)^Lora:[ \t]*$""")
-            if (loraHeader.containsMatchIn(text)) loraHeader.replace(text, "Lora:\n  Region: $code")
-            else "Lora:\n  Region: $code\n" + text
+        val text = readConfig(ctx)
+        val body = loraBody(text)
+        val updated = when {
+            body == null -> "Lora:\n  Region: $code\n" + text
+            else -> {
+                val block = text.substring(body)
+                val match = regionLine.find(block)
+                if (match != null) {
+                    val indent = match.groupValues[1]
+                    text.substring(0, body.first) +
+                        block.replaceRange(match.range, "${indent}Region: $code") +
+                        text.substring(body.last + 1)
+                } else {
+                    val insertAt = body.first
+                    text.substring(0, insertAt) + "\n  Region: $code" + text.substring(insertAt)
+                }
+            }
         }
-        writeConfig(ctx, text)
-        return text
+        writeConfig(ctx, updated)
+        return updated
     }
 
     /** Region codes spelled as in the firmware's region table (RadioInterface.cpp). */
@@ -98,12 +167,20 @@ object NodeFiles {
     }
 
     /**
-     * Restores config.yaml and prefs/ from a backup zip. Entries outside those two
-     * paths, and any containing "..", are skipped. Returns the number of files
-     * written. The caller must stop the daemon first.
+     * Restores config.yaml and prefs/ from a backup zip. The existing prefs/ tree is
+     * removed first, so the result is the backup and nothing else; a file that the
+     * backup does not contain does not survive into the restored node. Entries
+     * outside those two paths, entries that resolve outside prefs/, and oversized
+     * entries are skipped. Returns the number of files written.
+     *
+     * The caller must have stopped the daemon and waited for it to exit.
      */
     fun importBackup(ctx: Context, src: Uri): Int {
-        var n = 0
+        val staged = mutableMapOf<File, ByteArray>()
+        var total = 0L
+        val prefs = prefsDir(ctx)
+        val prefsPath = prefs.canonicalPath
+
         ctx.contentResolver.openInputStream(src)!!.use { ins ->
             ZipInputStream(ins).use { zip ->
                 var e = zip.nextEntry
@@ -111,19 +188,45 @@ object NodeFiles {
                     val name = e.name
                     val target = when {
                         name == "config.yaml" -> configFile(ctx)
-                        name.startsWith("prefs/") && !name.contains("..") -> File(prefsDir(ctx), name.removePrefix("prefs/"))
+                        name.startsWith("prefs/") -> File(prefs, name.removePrefix("prefs/"))
                         else -> null
                     }
-                    if (target != null && !e.isDirectory) {
-                        target.parentFile?.mkdirs()
-                        target.outputStream().use { zip.copyTo(it) }
-                        n++
+                    if (target != null && !e.isDirectory && withinPrefs(target, prefsPath, ctx)) {
+                        val bytes = readCapped(zip)
+                        total += bytes.size
+                        if (total > MAX_TOTAL_BYTES) throw java.io.IOException("backup is larger than ${MAX_TOTAL_BYTES / (1024 * 1024)} MB")
+                        staged[target] = bytes
                     }
                     zip.closeEntry(); e = zip.nextEntry
                 }
             }
         }
-        return n
+        if (staged.isEmpty()) return 0
+
+        // Nothing is written until the whole zip has been read, so a truncated or
+        // unreadable backup leaves the node untouched.
+        if (staged.keys.any { it.startsWith(prefs) }) prefs.deleteRecursively()
+        staged.forEach { (target, bytes) -> writeAtomically(target, bytes) }
+        _configVersion.value++
+        return staged.size
+    }
+
+    private fun withinPrefs(target: File, prefsPath: String, ctx: Context): Boolean {
+        if (target == configFile(ctx)) return true
+        val path = runCatching { target.canonicalPath }.getOrNull() ?: return false
+        return path == prefsPath || path.startsWith("$prefsPath/")
+    }
+
+    private fun readCapped(zip: ZipInputStream): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(8192)
+        var n = zip.read(buf)
+        while (n >= 0) {
+            out.write(buf, 0, n)
+            if (out.size() > MAX_ENTRY_BYTES) throw java.io.IOException("backup entry is larger than ${MAX_ENTRY_BYTES / (1024 * 1024)} MB")
+            n = zip.read(buf)
+        }
+        return out.toByteArray()
     }
 
     fun importConfigYaml(ctx: Context, src: Uri): String {
@@ -141,8 +244,8 @@ object NodeFiles {
 
     /**
      * Deletes the prefs/ tree: node database, channels, keys and identity. The daemon
-     * installs defaults on its next start. config.yaml is kept. The caller must stop
-     * the daemon first.
+     * installs defaults on its next start. config.yaml is kept. The caller must have
+     * stopped the daemon and waited for it to exit.
      */
     fun resetNode(ctx: Context) { prefsDir(ctx).deleteRecursively() }
 }

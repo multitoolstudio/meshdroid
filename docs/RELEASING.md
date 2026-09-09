@@ -36,8 +36,10 @@ git push -u github main
 `.gitignore` excludes the built binaries (`app/src/main/jniLibs/arm64-v8a/*.so`),
 the cross-built libraries (`firmware/android-prefix/`, `firmware/deps-src/`),
 Gradle and Studio state, and any signing material (`keystore.properties`,
-`*.jks`). The `meshdroid-notes/` folder beside the repo in the zip is
-personal working material and is not part of the repository.
+`*.jks`). It deliberately does not exclude `gradle/wrapper/gradle-wrapper.jar`:
+the wrapper is committed on purpose so that a fresh clone can run `./gradlew`
+without Android Studio. The `meshdroid-notes/` folder beside the repo in the zip
+is personal working material and is not part of the repository.
 
 ## Signing key
 
@@ -76,11 +78,11 @@ Record what changed in `CHANGELOG.md`.
 
 1. Rebuild the daemon if the firmware or patches changed:
    `cd firmware && ./build-meshtasticd-android.sh ~/meshtastic-firmware`.
-   Note the firmware commit hash from the build output (`firmware version
-   2.x.y.<hash>`); it belongs in the release notes.
+   The script prints the commit it built from at the end; that hash belongs in
+   the release notes, and it is the same one pinned in `FW_COMMIT_DEFAULT`.
 2. Bump `versionCode` and `versionName`.
 3. Android Studio: Build > Generate Signed App Bundle / APK > APK >
-   release. Or from a terminal with the wrapper present:
+   release. Or from a terminal, with the wrapper that ships in the repository:
    `./gradlew assembleRelease`.
 4. The APK is at `app/release/app-release.apk`. Rename it
    `meshdroid-<versionName>.apk` for the release page.
@@ -89,11 +91,19 @@ Record what changed in `CHANGELOG.md`.
 
 ## Release checklist
 
-- [ ] Firmware rebuilt from a known commit; hash recorded
+- [ ] Firmware rebuilt from the pinned commit; hash recorded in `CHANGELOG.md`
+      and the release notes
+- [ ] Build script's binary check passed (it fails the build if `API server
+      binding` or `Using pre-opened CH341 fd` is missing, which means a patch
+      did not reach the binary)
 - [ ] `versionCode` incremented, `versionName` updated
 - [ ] `CHANGELOG.md` updated
 - [ ] Release APK built, signed with the project key, installed and tested on
       a phone: fresh install and update over the previous version
+- [ ] With the LAN switch off, the log shows `API server binding 127.0.0.1:4403`
+      and no bind-address warning from Meshdroid
+- [ ] Stop, Restart and Close Meshdroid each leave no daemon behind:
+      `adb shell ps -A | grep meshtasticd` comes back empty
 - [ ] Git tag `v<versionName>` pushed
 - [ ] Release created on the git host with the APK attached, the firmware
       commit hash, and a link to the patches in `firmware/`
@@ -105,6 +115,12 @@ the patches in `firmware/`). Distributing the APK therefore requires making
 the corresponding source available. Publishing this repository, with the
 firmware commit hash in each release's notes, satisfies that: anyone can
 reproduce the binary from the named upstream commit, the patches and the build
-scripts.
+scripts. Pinning the commit in `build-meshtasticd-android.sh` is part of that
+promise, since a build of whatever `master` was on a given day is not
+reproducible later.
+
+The APK also ships the NDK's `libc++_shared.so`, which is part of the LLVM
+project and carries the Apache 2.0 licence with LLVM exceptions. It is
+redistributed unmodified.
 
 Meshdroid's own code is GPL-3.0 as well; see `LICENSE`.

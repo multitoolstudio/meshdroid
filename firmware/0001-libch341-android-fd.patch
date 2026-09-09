@@ -3,14 +3,14 @@ index c964919..9dbfc6a 100644
 --- a/libpinedio-usb.c
 +++ b/libpinedio-usb.c
 @@ -11,6 +11,7 @@
-  */
+ */
  
  #include <stdio.h>
 +#include <stdlib.h>
  #include <string.h>
  #include <unistd.h>
  #include "libpinedio-usb.h"
-@@ -208,6 +209,49 @@ static uint8_t reverse_byte(uint8_t x) {
+@@ -208,6 +209,58 @@
    return x;
  }
  
@@ -20,16 +20,25 @@ index c964919..9dbfc6a 100644
 +#include <stddef.h>
 +/* Android: receive a usbfs fd over an abstract-namespace Unix socket (SCM_RIGHTS).
 + * The app's foreground service listens on LocalServerSocket(name) and sends the
-+ * fd from UsbDeviceConnection.getFileDescriptor(). */
++ * fd from UsbDeviceConnection.getFileDescriptor().
++ * PINEDIO_FD_PATCH_R2: revision marker read by build-meshtasticd-android.sh to
++ * tell this patch from the one Meshdroid 1.0.0 applied. */
 +static int pinedio_recv_fd_from_socket(const char *name) {
++  /* The abstract namespace spends the first byte of sun_path on a NUL, so a name
++   * has to fit in the field with one byte to spare. */
++  size_t name_len = (name == NULL) ? 0 : strlen(name);
++  if (name_len == 0 || name_len > sizeof(((struct sockaddr_un *)0)->sun_path) - 2) {
++    fprintf(stderr, "PINEDIO_USB_FD_SOCKET name is empty or too long\n");
++    return -1;
++  }
 +  int sock = socket(AF_UNIX, SOCK_STREAM, 0);
 +  if (sock < 0) return -1;
 +  struct sockaddr_un addr;
 +  memset(&addr, 0, sizeof(addr));
 +  addr.sun_family = AF_UNIX;
 +  addr.sun_path[0] = '\0';                       /* abstract namespace */
-+  strncpy(addr.sun_path + 1, name, sizeof(addr.sun_path) - 2);
-+  socklen_t len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + strlen(name));
++  memcpy(addr.sun_path + 1, name, name_len);
++  socklen_t len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + name_len);
 +  if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
 +    fprintf(stderr, "connect(@%s) failed\n", name);
 +    close(sock);
@@ -60,7 +69,7 @@ index c964919..9dbfc6a 100644
  int32_t pinedio_init(struct pinedio_inst *inst, void *driver) {
    int32_t ret;
    inst->int_running_cnt = 0;
-@@ -224,6 +268,28 @@ int32_t pinedio_init(struct pinedio_inst *inst, void *driver) {
+@@ -224,6 +277,28 @@
      return -1;
    }
  
@@ -89,7 +98,7 @@ index c964919..9dbfc6a 100644
    ret = libusb_init(NULL);
    if (ret < 0) {
      fprintf(stderr, "Couldn't initialize libusb!\n");
-@@ -231,6 +297,28 @@ int32_t pinedio_init(struct pinedio_inst *inst, void *driver) {
+@@ -231,6 +306,32 @@
    }
  
    libusb_set_option(NULL, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_LOG_LEVEL_INFO);
@@ -99,6 +108,9 @@ index c964919..9dbfc6a 100644
 +    if (ret != 0 || inst->handle == NULL) {
 +      fprintf(stderr, "libusb_wrap_sys_device(fd=%d) failed: %s\n", pre_opened_fd, libusb_error_name(ret));
 +      inst->handle = NULL;
++      /* libusb does not take ownership of a wrapped descriptor, so the copy the
++       * app sent us is ours to close on the way out. */
++      close(pre_opened_fd);
 +      return -2;
 +    }
 +    ret = libusb_claim_interface(inst->handle, 0);
@@ -106,6 +118,7 @@ index c964919..9dbfc6a 100644
 +      fprintf(stderr, "Failed to claim interface 0 on wrapped fd: %s\n", libusb_error_name(ret));
 +      libusb_close(inst->handle);
 +      inst->handle = NULL;
++      close(pre_opened_fd);
 +      return -2;
 +    }
 +    struct libusb_device_descriptor desc;
@@ -118,7 +131,7 @@ index c964919..9dbfc6a 100644
    if (inst->options[PINEDIO_OPTION_VID] == 0) {
      inst->options[PINEDIO_OPTION_VID] = 0x1A86;
    }
-@@ -290,6 +378,8 @@ int32_t pinedio_init(struct pinedio_inst *inst, void *driver) {
+@@ -290,6 +391,8 @@
      return -2;
    }
  

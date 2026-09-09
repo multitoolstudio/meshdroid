@@ -1,0 +1,9 @@
+<resources>
+    <!-- Dark mode: the status bar sits on a dark surface, so its icons have to be
+         light. Without this the icons are dark on dark and effectively invisible. -->
+    <style name="Theme.Meshdroid" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

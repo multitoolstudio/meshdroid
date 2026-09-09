@@ -88,7 +88,10 @@ raising it.
 - **Start when radio is plugged in.** The USB auto-launch.
 - **Back up / Restore.** Moves `config.yaml` plus the node database, channels
   and keys as a zip through the system file picker: Downloads, Drive, a USB
-  stick, wherever. Restore stops the node first; start it again afterwards.
+  stick, wherever. The zip holds the node's private key in the clear, so put it
+  somewhere you would put a key. Restore asks first, then stops the node, waits
+  for it to exit, and replaces `config.yaml` and the whole `prefs/` tree with
+  what the backup contains. Start the node again afterwards.
 - **Reset identity.** Deletes the node database and keys. The node gets a new
   keypair on its next start. `config.yaml` is kept. Only available while the
   node is stopped.
@@ -147,6 +150,8 @@ Linux install's files can be zipped up the same way and restored on the phone.
 | Keys blank in the Meshtastic app, `/prefs/config.proto does not exist` in the log | The LoRa region is unset. Set it in the Node tab. |
 | Node restarts on its own | USB power. Lower `SX126X_MAX_POWER` in the Config tab or use a powered hub. |
 | Laptop cannot reach the node over Wi-Fi | Intended when *Allow LAN access* is off. Turn it on and restart the node. Check you are using the phone's IP, not another node's. |
+| Log warns that the daemon never reported its bind address | The bundled daemon was built without firmware patch 0002, so it listens on every interface whatever the LAN switch says. Rebuild with `firmware/build-meshtasticd-android.sh`. |
+| Status stays *Starting* | After 30 seconds Meshdroid says so and points at the Logs tab. Usually the pinmap in the Config tab does not match the dongle, or the radio is not answering on SPI. |
 
 ## Building from source
 
@@ -163,5 +168,9 @@ Public License, version 3 (see [LICENSE](LICENSE)).
 
 The daemon shipped in each release is built from
 [meshtastic/firmware](https://github.com/meshtastic/firmware) (GPL-3.0) with
-the patches in `firmware/`. Those patches and build scripts are the
-corresponding source for the binary.
+the patches in `firmware/`, at the commit pinned in
+`firmware/build-meshtasticd-android.sh`. Those patches and build scripts are
+the corresponding source for the binary.
+
+The APK also contains the NDK's `libc++_shared.so`, redistributed unmodified
+under the Apache 2.0 licence with LLVM exceptions.

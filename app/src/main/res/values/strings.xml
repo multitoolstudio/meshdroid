@@ -1,3 +1,113 @@
 <resources>
     <string name="app_name">Meshdroid</string>
+
+    <!-- Foreground service notification -->
+    <string name="channel_node_status">Node status</string>
+    <string name="notif_running">Node running · 127.0.0.1:%1$d</string>
+    <string name="action_stop_node">Stop node</string>
+
+    <!-- Node status -->
+    <string name="status_stopped">Node stopped</string>
+    <string name="status_starting">Starting…</string>
+    <string name="status_running">Node running</string>
+    <string name="status_stopping">Stopping…</string>
+    <string name="status_error">Node error</string>
+
+    <!-- Status detail lines set from the activity -->
+    <string name="detail_no_radio">No CH341 radio found. Check the OTG cable.</string>
+    <string name="detail_usb_permission_denied">USB permission denied.</string>
+    <string name="detail_waiting_permission">Waiting for USB permission…</string>
+
+    <!-- Tabs -->
+    <string name="tab_node">Node</string>
+    <string name="tab_config">Config</string>
+    <string name="tab_logs">Logs</string>
+
+    <!-- Node screen -->
+    <string name="label_node_id">Node ID  %1$s</string>
+    <string name="label_firmware">Firmware  %1$s</string>
+    <string name="label_radio_serial">Radio serial  %1$s</string>
+    <string name="hint_region_unset">LoRa region not set. The node won\'t transmit or create its identity keys until it is. Pick one below.</string>
+    <string name="hint_plug_radio">Plug a CH341 LoRa dongle into the USB-C port.</string>
+    <string name="hint_notifications_denied">Notifications are off, so the node has no status notification and no Stop button in the shade. Turn them on in Settings &gt; Apps &gt; Meshdroid.</string>
+    <string name="btn_start">Start node</string>
+    <string name="btn_stop">Stop</string>
+    <string name="btn_restart">Restart</string>
+
+    <string name="item_region">LoRa region</string>
+    <string name="item_region_unset">Not set. Required before the node can transmit.</string>
+    <string name="item_region_set">%1$s. Seeds a new node; later changes from the Meshtastic app take precedence.</string>
+    <string name="btn_choose">Choose</string>
+
+    <string name="item_connection">Meshtastic app connection</string>
+    <string name="item_connection_detail">Network → 127.0.0.1, port %1$d</string>
+
+    <string name="item_lan">Allow LAN access</string>
+    <string name="item_lan_on">Other devices on Wi-Fi can connect and reconfigure this node.</string>
+    <string name="item_lan_off">API reachable only from this phone. Recommended.</string>
+
+    <string name="item_autostart">Start when radio is plugged in</string>
+
+    <string name="item_files">Node files</string>
+    <string name="item_files_detail">config.yaml plus the node database, keys and channels (prefs/).</string>
+    <string name="btn_backup">Back up</string>
+    <string name="btn_restore">Restore</string>
+    <string name="btn_reset">Reset identity</string>
+
+    <string name="item_close">Close Meshdroid</string>
+    <string name="item_close_detail">Stops the node and quits the app. Stop and Restart above only affect the meshtasticd process.</string>
+    <string name="btn_close">Close Meshdroid</string>
+
+    <string name="dialog_region_title">Set your LoRa region</string>
+    <string name="dialog_region_text">The node has no region yet, so it can\'t transmit or create its identity keys. Choose the region you\'re in:</string>
+    <string name="btn_later">Later</string>
+
+    <string name="dialog_reset_title">Reset node identity?</string>
+    <string name="dialog_reset_text">Deletes the node database, channels and keys. The node gets a new keypair on next start. config.yaml is kept.</string>
+    <string name="btn_reset_confirm">Reset</string>
+    <string name="btn_cancel">Cancel</string>
+
+    <string name="dialog_restore_title">Restore from a backup?</string>
+    <string name="dialog_restore_text">Replaces config.yaml and the whole prefs/ tree, including this node\'s keys and node database, with the contents of the backup. The node is stopped first.</string>
+    <string name="btn_restore_confirm">Restore</string>
+
+    <string name="snack_backup_saved">Backup saved</string>
+    <string name="snack_backup_failed">Backup failed: %1$s</string>
+    <string name="snack_restoring">Stopping the node, then restoring…</string>
+    <string name="snack_restored">Restored %1$d files. Start the node to apply.</string>
+    <string name="snack_restore_failed">Restore failed: %1$s</string>
+    <string name="snack_region_saved">Region %1$s saved. Applied on next start.</string>
+    <string name="snack_reset_done">Node data cleared</string>
+    <string name="snack_restart_to_apply">Restart the node to apply</string>
+
+    <string name="version_line">Meshdroid %1$s (build %2$d)</string>
+    <string name="version_daemon">meshtasticd built from firmware %1$s</string>
+
+    <!-- Config screen -->
+    <string name="config_title">config.yaml</string>
+    <string name="config_subtitle">Same format as /etc/meshtasticd/config.yaml on Linux. Changes take effect after a restart.</string>
+    <string name="btn_presets">Presets</string>
+    <string name="btn_import">Import</string>
+    <string name="btn_export">Export</string>
+    <string name="btn_save">Save</string>
+    <string name="btn_save_restart">Save &amp; restart</string>
+    <string name="btn_revert">Revert</string>
+    <string name="label_unsaved">Unsaved changes</string>
+    <string name="label_saved">Saved</string>
+    <string name="label_loading">Loading…</string>
+    <string name="dialog_preset_title">Load preset “%1$s”?</string>
+    <string name="dialog_preset_text">Replaces the editor contents. Nothing is saved until you press Save.</string>
+    <string name="btn_load">Load</string>
+    <string name="snack_config_exported">config.yaml exported</string>
+    <string name="snack_config_imported">config.yaml imported. Restart to apply.</string>
+    <string name="snack_config_saved">Saved</string>
+    <string name="snack_config_changed">config.yaml changed elsewhere and was reloaded</string>
+    <string name="snack_config_changed_dirty">config.yaml changed elsewhere. Revert to load the new version.</string>
+
+    <!-- Logs screen -->
+    <string name="chip_follow">Follow</string>
+    <string name="chip_verbose">Verbose</string>
+    <string name="btn_clear">Clear</string>
+    <string name="label_filter">Filter</string>
+    <string name="label_line_count">%1$d lines</string>
 </resources>

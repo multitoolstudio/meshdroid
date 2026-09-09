@@ -23,10 +23,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import studio.multitool.meshdroid.R
 
 /** Material 3 theme: dynamic colour on Android 12+, a fixed green scheme below that. */
 @Composable
@@ -41,15 +43,22 @@ fun MeshdroidTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = scheme, content = content)
 }
 
-private enum class Tab(val route: String, val label: String, val icon: ImageVector) {
-    NODE("node", "Node", Icons.Filled.Hub),
-    CONFIG("config", "Config", Icons.Filled.Description),
-    LOGS("logs", "Logs", Icons.Filled.Terminal),
+private enum class Tab(val route: String, val label: Int, val icon: ImageVector) {
+    NODE("node", R.string.tab_node, Icons.Filled.Hub),
+    CONFIG("config", R.string.tab_config, Icons.Filled.Description),
+    LOGS("logs", R.string.tab_logs, Icons.Filled.Terminal),
 }
 
 /** Root scaffold: bottom navigation between the Node, Config and Logs screens. */
 @Composable
-fun MeshdroidApp(radioPresent: Boolean, onStart: () -> Unit, onStop: () -> Unit, onRestart: () -> Unit, onClose: () -> Unit) {
+fun MeshdroidApp(
+    radioPresent: Boolean,
+    notificationsDenied: Boolean,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onRestart: () -> Unit,
+    onClose: () -> Unit
+) {
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val current = backStack?.destination?.route
@@ -58,18 +67,19 @@ fun MeshdroidApp(radioPresent: Boolean, onStart: () -> Unit, onStop: () -> Unit,
         bottomBar = {
             NavigationBar {
                 Tab.entries.forEach { t ->
+                    val label = stringResource(t.label)
                     NavigationBarItem(
                         selected = current == t.route,
                         onClick = { if (current != t.route) nav.navigate(t.route) { popUpTo(Tab.NODE.route); launchSingleTop = true } },
-                        icon = { Icon(t.icon, contentDescription = t.label) },
-                        label = { Text(t.label) }
+                        icon = { Icon(t.icon, contentDescription = label) },
+                        label = { Text(label) }
                     )
                 }
             }
         }
     ) { inner ->
         NavHost(nav, startDestination = Tab.NODE.route, modifier = Modifier.padding(inner)) {
-            composable(Tab.NODE.route) { NodeScreen(radioPresent, onStart, onStop, onRestart, onClose) }
+            composable(Tab.NODE.route) { NodeScreen(radioPresent, notificationsDenied, onStart, onStop, onRestart, onClose) }
             composable(Tab.CONFIG.route) { ConfigScreen(onRestart) }
             composable(Tab.LOGS.route) { LogsScreen() }
         }
