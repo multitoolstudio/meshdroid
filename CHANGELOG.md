@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.2
+
+- Fixed the message row on the Mesh tab being laid out below the navigation bar, which
+  showed as a stray rounded rectangle under the event list. The weight now sits on a plain
+  Box with the list filling it, rather than on the SelectionContainer with the list
+  stretching inside. The Logs tab had the same structure and was quietly clipping its line
+  count; both are fixed.
+- The Mesh tab keeps the message row above the keyboard, and gives up the status and
+  sensor cards while the keyboard is open so the event list and the input keep their
+  space instead of everything competing for half a screen. The cards return on dismiss.
+
 ## 1.2.1
 
 - Phone sensor telemetry. The Mesh tab lists the environment sensors this phone actually

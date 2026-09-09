@@ -26,3 +26,6 @@ captures/
 
 # Signed release APKs from Android Studio
 app/release/
+
+#Agent Docs
+AGENT-BRIEF.md

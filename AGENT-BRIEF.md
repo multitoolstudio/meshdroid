@@ -1,6 +1,6 @@
 # Meshdroid: briefing for a new session
 
-State at the time of writing: version 1.2.1, built against meshtastic/firmware 2.8.1
+State at the time of writing: version 1.2.2, built against meshtastic/firmware 2.8.1
 commit `fdb6730`, protobufs commit `ca2cb1a8`. Working and installed on a Pixel 9 Pro.
 
 ## What it is
@@ -150,6 +150,9 @@ Android and Kotlin
 - Kotlin block comments nest. A path like `prefs/*` inside a KDoc comment opens a second
   comment.
 - Compose: `weight` is a scope member, never imported.
+- `Modifier.weight()` belongs on a plain Box with the child filling it. Weight on a
+  SelectionContainer with `fillMaxHeight()` on the list inside measured whatever followed
+  off the bottom of the screen, which showed as a stray rectangle under the event list.
 - Android's crash log buffer (`adb logcat -b crash -d`) is a ring; clear it with `-c`.
 
 Build environment
@@ -268,7 +271,7 @@ mismatched pair shows up as a field that quietly stops decoding rather than as a
 ## Where the work is going
 
 Done: 1.0.1 audit fixes, 1.1.0 battery telemetry, 1.1.1 battery level while charging,
-1.2.0 the mesh link and the Mesh tab, 1.2.1 phone sensor telemetry.
+1.2.0 the mesh link and the Mesh tab, 1.2.1 phone sensor telemetry, 1.2.2 layout fixes.
 
 Open, roughly in order:
 

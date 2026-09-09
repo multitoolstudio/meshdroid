@@ -6,8 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -96,10 +96,13 @@ fun LogsScreen() {
         OutlinedTextField(value = filter, onValueChange = { filter = it }, modifier = Modifier.fillMaxWidth(),
             singleLine = true, label = { Text(stringResource(R.string.label_filter)) })
 
-        SelectionContainer(Modifier.fillMaxWidth().weight(1f, fill = true)) {
+        // Weight on the Box, fill inside it. See the note in MeshScreen: the other way
+        // round pushes whatever follows off the bottom of the screen.
+        Box(Modifier.fillMaxWidth().weight(1f)) {
+            SelectionContainer {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxWidth().fillMaxHeight().clip(RoundedCornerShape(12.dp)).background(Color(0xFF111111)).padding(8.dp)
+                modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)).background(Color(0xFF111111)).padding(8.dp)
             ) {
                 items(shown) { line ->
                     Text(line, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 14.sp,
@@ -110,6 +113,7 @@ fun LogsScreen() {
                             else -> Color(0xFFDDDDDD)
                         })
                 }
+            }
             }
         }
 

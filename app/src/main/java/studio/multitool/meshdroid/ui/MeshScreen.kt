@@ -3,11 +3,14 @@ package studio.multitool.meshdroid.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -36,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -80,13 +84,17 @@ fun MeshScreen() {
     val listState = rememberLazyListState()
     val nodeRunning = nodeStatus == NodeStatus.RUNNING
     val connected = linkStatus == LinkStatus.CONNECTED
+    // With the keyboard up there is roughly half a screen to work with. The cards are
+    // reference material rather than something to read while typing, so they give up their
+    // space to the event list and come back when the keyboard is dismissed.
+    val keyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
 
     LaunchedEffect(Unit) { MeshLinkHolder.init(ctx) }
     LaunchedEffect(history.size) { if (history.isNotEmpty()) listState.scrollToItem(history.size - 1) }
 
-    Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize().imePadding()) {
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Card(Modifier.fillMaxWidth()) {
+        if (!keyboardOpen) Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     stringResource(when (linkStatus) {
@@ -121,16 +129,22 @@ fun MeshScreen() {
             }
         }
 
-        SensorCard(published)
+        if (!keyboardOpen) SensorCard(published)
 
-        SelectionContainer(Modifier.fillMaxWidth().weight(1f, fill = true)) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxWidth().fillMaxHeight().clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFF111111)).padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                itemsIndexed(history) { _, e -> EventLine(e) }
+        // The weight goes on a plain Box and the list fills it. Putting weight on the
+        // SelectionContainer and fillMaxHeight on the list inside it left the row below
+        // measured off the bottom of the screen, with only the text field's top border
+        // visible under the navigation bar.
+        Box(Modifier.fillMaxWidth().weight(1f).heightIn(min = 80.dp)) {
+            SelectionContainer {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF111111)).padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    itemsIndexed(history) { _, e -> EventLine(e) }
+                }
             }
         }
 
