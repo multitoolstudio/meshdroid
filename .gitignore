@@ -32,3 +32,9 @@ AGENT-BRIEF.md
 
 # Agent handoff notes, working material rather than part of the project
 AGENT-BRIEF.md
+
+
+#Meshcore
+firmware/meshcore/spike/.venv/
+firmware/meshcore/spike/__pycache__/
+firmware/meshcore/spike/meshtoad-identity.key
