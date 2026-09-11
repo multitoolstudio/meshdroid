@@ -8,9 +8,12 @@ and STM32. Each chain ends in an #error rather than a default, so a portduino
 build cannot compile until a branch is added. Three sites need one:
 
   src/helpers/IdentityStore.h          the FILESYSTEM selection
+  examples/companion_radio/DataStore.cpp   creating the identity directory
   examples/companion_radio/main.cpp    the DataStore declaration
   examples/companion_radio/main.cpp    the filesystem bring-up in setup()
   examples/companion_radio/DataStore.cpp   formatFileSystem()
+  examples/companion_radio/main.cpp    declaring the TCP interface
+  examples/companion_radio/main.cpp    registering the TCP interface
 
 This edits the checkout, runs git diff to produce the patch, then restores the
 checkout so build-meshcored-android.sh can apply the patch itself the way it
@@ -92,6 +95,28 @@ SETUP_NEW = """#elif defined(PORTDUINO_PLATFORM)
 #endif
 """
 
+# --- DataStore.cpp: create the identity directory ---------------------------
+# identity_store.begin() is the only thing that creates /identity, and upstream
+# calls it on RP2040 only: ESP32 uses SPIFFS, which is flat and needs no
+# directory, and NRF52 and STM32 pass "" as the directory so there is nothing to
+# make. On portduino it is a real directory on a real filesystem, and without
+# this every identity write fails with
+#   fopen(<root>/identity/_main.id) failed
+#   IdentityStore::save() write - Err
+# leaving the node with no private key, unable to sign an advert or complete an
+# ACK. It receives perfectly and transmits nothing.
+IDDIR_ANCHOR = """#if defined(RP2040_PLATFORM)
+  identity_store.begin();
+#endif
+"""
+
+IDDIR_NEW = """#if defined(RP2040_PLATFORM) || defined(PORTDUINO_PLATFORM)
+  // Meshdroid: portduino's VFS is a real directory tree, so /identity has to be
+  // created before the first identity write, exactly as on RP2040's LittleFS.
+  identity_store.begin();
+#endif
+"""
+
 # --- DataStore.cpp: formatFileSystem() ---------------------------------------
 # There is no partition to reformat, so delete the files the firmware owns.
 # Same outcome as a factory reset on an embedded board.
@@ -112,11 +137,53 @@ FORMAT_NEW = """#elif defined(PORTDUINO_PLATFORM)
 #endif
 """
 
+# --- main.cpp: the TCP companion interface ----------------------------------
+# MeshCore's WiFi companion is ESP32-only, and main.cpp #errors for any other
+# platform with WIFI_SSID set. SocketSerialInterface implements the same
+# BaseSerialInterface over a POSIX socket, with the identical framing, so it
+# registers the way BLE and USB do.
+#
+# InterfaceType::WiFi rather than a new enum value: MeshCore clients already
+# treat a TCP companion as the WiFi one, and adding an enumerator would mean
+# patching MultiSerialInterface.h too.
+IFACE_DECL_ANCHOR = """MultiSerialInterface interface_manager;
+"""
+
+IFACE_DECL_NEW = """MultiSerialInterface interface_manager;
+
+#if defined(MESHCORE_TCP_INTERFACE)
+  // Meshdroid: the companion protocol over TCP. Header-only and living in the
+  // variant directory, so it survives a MeshCore version bump untouched.
+  #include <SocketSerialInterface.h>
+  SocketSerialInterface tcp_interface;
+#endif
+"""
+
+IFACE_REG_ANCHOR = """// add bluetooth interface
+#if defined(BLE_PIN_CODE)
+"""
+
+IFACE_REG_NEW = """// Meshdroid: add the TCP companion interface
+#if defined(MESHCORE_TCP_INTERFACE)
+  #ifndef TCP_BIND_ADDR
+    #define TCP_BIND_ADDR "0.0.0.0"
+  #endif
+  tcp_interface.begin(TCP_BIND_ADDR, TCP_PORT);
+  interface_manager.addInterface(InterfaceType::WiFi, &tcp_interface);
+#endif
+
+// add bluetooth interface
+#if defined(BLE_PIN_CODE)
+"""
+
 EDITS = [
     ("src/helpers/IdentityStore.h", IDSTORE_ANCHOR, IDSTORE_NEW, "FILESYSTEM selection"),
     ("examples/companion_radio/main.cpp", DECL_ANCHOR, DECL_NEW, "DataStore declaration"),
     ("examples/companion_radio/main.cpp", SETUP_ANCHOR, SETUP_NEW, "setup() filesystem"),
+    ("examples/companion_radio/DataStore.cpp", IDDIR_ANCHOR, IDDIR_NEW, "identity directory"),
     ("examples/companion_radio/DataStore.cpp", FORMAT_ANCHOR, FORMAT_NEW, "formatFileSystem()"),
+    ("examples/companion_radio/main.cpp", IFACE_DECL_ANCHOR, IFACE_DECL_NEW, "TCP interface declaration"),
+    ("examples/companion_radio/main.cpp", IFACE_REG_ANCHOR, IFACE_REG_NEW, "TCP interface registration"),
 ]
 
 

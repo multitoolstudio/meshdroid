@@ -1,9 +1,7 @@
-diff --git a/libpinedio-usb.c b/libpinedio-usb.c
-index c964919..9dbfc6a 100644
 --- a/libpinedio-usb.c
 +++ b/libpinedio-usb.c
 @@ -11,6 +11,7 @@
- */
+  */
  
  #include <stdio.h>
 +#include <stdlib.h>

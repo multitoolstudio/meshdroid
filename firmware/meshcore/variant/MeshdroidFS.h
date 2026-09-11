@@ -44,12 +44,35 @@ public:
 
   // The three-argument form MeshCore uses. "create" means make the file when it
   // is absent, which portduino's two-argument open does not do for "r".
+  //
+  // Parent directories are created too. portduino's VFS is a real directory
+  // tree and will not make them, while SPIFFS on ESP32 is flat and never needed
+  // them, so MeshCore assumes a path like "/identity/_main.id" can just be
+  // opened. Belt and braces alongside the identity_store.begin() call that
+  // patch 0001 enables: if a future MeshCore version adds another nested path,
+  // this handles it rather than failing the write silently.
   File open(const char* path, const char* mode = FILE_READ, bool create = false) {
-    if (create && !_fs->exists(path)) {
-      File made = _fs->open(path, FILE_WRITE);
-      if (made) made.close();
+    if (create) {
+      makeParents(path);
+      if (!_fs->exists(path)) {
+        File made = _fs->open(path, FILE_WRITE);
+        if (made) made.close();
+      }
     }
     return _fs->open(path, mode);
+  }
+
+  // Creates every directory component of a file path, ignoring the last.
+  // mkdir on an existing directory fails harmlessly, so the result is not
+  // checked; what matters is that the leaf's parent exists afterwards.
+  void makeParents(const char* path) {
+    if (path == NULL) return;
+    std::string p(path);
+    size_t at = p.find('/', 1);
+    while (at != std::string::npos) {
+      _fs->mkdir(p.substr(0, at).c_str());
+      at = p.find('/', at + 1);
+    }
   }
 
   bool exists(const char* path) { return _fs->exists(path); }
