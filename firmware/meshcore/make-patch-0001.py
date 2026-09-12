@@ -15,6 +15,10 @@ build cannot compile until a branch is added. Three sites need one:
   examples/companion_radio/main.cpp    declaring the TCP interface
   examples/companion_radio/main.cpp    registering the TCP interface
 
+An eighth edit adds a marker string to DataStore.cpp. It changes no behaviour
+and exists so the build script can prove from the finished binary that this
+patch reached the build.
+
 This edits the checkout, runs git diff to produce the patch, then restores the
 checkout so build-meshcored-android.sh can apply the patch itself the way it
 applies every other one. Running it twice is harmless.
@@ -31,6 +35,29 @@ import sys
 from pathlib import Path
 
 PATCH_NAME = "0001-portduino-filesystem.patch"
+
+# --- DataStore.cpp: a marker the build can be checked against ---------------
+# Both things this patch adds fail silently when the patch does not apply. A
+# binary with no identity directory builds, links, runs, receives perfectly and
+# cannot sign an advert; a binary with no TCP interface builds and listens on
+# nothing. Neither failure looks like a build problem, and both have cost days
+# here. This string is what the build script greps the finished binary for
+# before it installs anything.
+#
+# __attribute__((used)) keeps it past --gc-sections. Bump the revision whenever
+# the patch changes, so a stale patch is distinguishable from a missing one.
+MARKER_ANCHOR = """#include <Arduino.h>
+#include "DataStore.h"
+"""
+
+MARKER_NEW = """#include <Arduino.h>
+#include "DataStore.h"
+
+#if defined(PORTDUINO_PLATFORM)
+// Meshdroid: proof that patch 0001 reached this build. See make-patch-0001.py.
+__attribute__((used)) static const char MESHDROID_PATCH_0001[] = "MESHDROID_PATCH_0001_R1";
+#endif
+"""
 
 # --- IdentityStore.h: select the filesystem ---------------------------------
 # This branch is why there is no -include for MeshdroidFS.h. Force-including it
@@ -177,6 +204,7 @@ IFACE_REG_NEW = """// Meshdroid: add the TCP companion interface
 """
 
 EDITS = [
+    ("examples/companion_radio/DataStore.cpp", MARKER_ANCHOR, MARKER_NEW, "patch marker"),
     ("src/helpers/IdentityStore.h", IDSTORE_ANCHOR, IDSTORE_NEW, "FILESYSTEM selection"),
     ("examples/companion_radio/main.cpp", DECL_ANCHOR, DECL_NEW, "DataStore declaration"),
     ("examples/companion_radio/main.cpp", SETUP_ANCHOR, SETUP_NEW, "setup() filesystem"),

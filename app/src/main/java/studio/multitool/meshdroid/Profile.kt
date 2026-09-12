@@ -33,7 +33,17 @@ enum class Profile(
      * platformio-android.ini), so there is no second port to move it to.
      */
     val supportsProxy: Boolean,
-    /** Whether the BBS can run on this profile. MeshCore support is 2.1 at the earliest. */
+    /**
+     * Whether MeshLink can talk to this daemon. MeshLink is Meshtastic's TCP API
+     * with Meshtastic's protobufs, so it is not a question of a port but of a
+     * protocol. Drives the Mesh tab and whether MeshLinkHolder holds a link open.
+     */
+    val supportsMeshLink: Boolean,
+    /**
+     * Whether the BBS can run on this profile. The BBS answers over MeshLink, so
+     * this can never be true where supportsMeshLink is false. MeshCore support is
+     * 2.1 at the earliest.
+     */
     val supportsBbs: Boolean,
     /**
      * Whether the daemon reads a config file. meshtasticd has config.yaml;
@@ -41,6 +51,12 @@ enum class Profile(
      * the companion protocol, so there is no file for the Config tab to show.
      */
     val hasConfigFile: Boolean,
+    /**
+     * Whether the daemon takes a verbosity flag on its command line. meshtasticd
+     * has -v; MeshCore's verbosity is the MESH_DEBUG and MESH_PACKET_LOGGING
+     * build flags, so there is nothing for the Logs tab's Verbose chip to set.
+     */
+    val supportsVerbose: Boolean,
 ) {
     MESHTASTIC(
         id = "meshtastic",
@@ -49,8 +65,10 @@ enum class Profile(
         dataDirName = "meshtasticd",
         clientPort = 4403,
         supportsProxy = true,
+        supportsMeshLink = true,
         supportsBbs = true,
         hasConfigFile = true,
+        supportsVerbose = true,
     ),
 
     MESHCORE(
@@ -60,9 +78,28 @@ enum class Profile(
         dataDirName = "meshcore",
         clientPort = 5000,
         supportsProxy = false,
+        supportsMeshLink = false,
         supportsBbs = false,
         hasConfigFile = false,
+        supportsVerbose = false,
     );
+
+    /**
+     * The binary's name without the packaging, "meshtasticd" or "meshcored".
+     * Used as the logcat tag and the reader thread's name, so filtering logcat
+     * on a daemon name shows that daemon.
+     */
+    val processName: String get() = binary.removePrefix("lib").removeSuffix(".so")
+
+    /**
+     * The pinned upstream the packaged daemon was built from, shown at the
+     * bottom of the Node tab. Set in app/build.gradle.kts; keep each one in step
+     * with the pin in the build script that produces that binary.
+     */
+    val daemonBuild: String get() = when (this) {
+        MESHTASTIC -> BuildConfig.DAEMON_FIRMWARE_COMMIT
+        MESHCORE -> BuildConfig.MESHCORE_COMMIT
+    }
 
     /** Where this daemon keeps its state. Created on demand. */
     fun dataDir(ctx: Context): File = File(ctx.filesDir, dataDirName).apply { mkdirs() }
@@ -108,9 +145,11 @@ enum class Profile(
                 }
                 MESHCORE -> {
                     // meshcored binds from TCP_BIND_ADDR, compiled in as 0.0.0.0.
-                    // There is no runtime equivalent of MESHTASTICD_BIND_ADDR yet,
-                    // so the LAN switch cannot restrict it. Noted rather than
-                    // pretended otherwise; see the LAN note in NodeScreen.
+                    // SocketSerialInterface::begin() takes a bind address and patch
+                    // 0001 passes it the compiled-in one, so a getenv inside begin()
+                    // is all this needs, but that is after 2.0.0. Until then
+                    // canRestrictBind is false and the Node tab hides the LAN switch
+                    // rather than showing one that does nothing.
                     batteryFile?.let { put("MESHCORE_BATTERY_FILE", it.absolutePath) }
                 }
             }
@@ -118,7 +157,7 @@ enum class Profile(
 
     /**
      * True when this profile's daemon can be told to bind to loopback only.
-     * Drives whether the LAN switch is shown or explained as unavailable.
+     * The Node tab shows the LAN switch only for profiles where it applies.
      */
     val canRestrictBind: Boolean get() = this == MESHTASTIC
 

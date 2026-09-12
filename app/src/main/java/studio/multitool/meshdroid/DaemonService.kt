@@ -31,7 +31,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * Foreground service that owns one meshtasticd process.
+ * Foreground service that owns one daemon process, the one the active profile
+ * names.
  *
  * Every transition (start, stop, restart) runs on the single "daemon-control"
  * thread, which serialises them and keeps blocking work off the main thread.
@@ -39,7 +40,7 @@ import java.util.concurrent.TimeUnit
  * does inline is startForeground, which the framework requires promptly.
  *
  * A start opens the USB device, acquires a wake lock, starts the fd hand-off
- * socket, then launches the daemon binary from nativeLibraryDir. A reader thread
+ * socket, then launches the profile's binary from nativeLibraryDir. A reader thread
  * forwards the daemon's stdout into DaemonState and to logcat. A stop signals
  * the daemon with SIGTERM, waits, then kills it, and releases everything in
  * reverse order.
@@ -67,6 +68,14 @@ class DaemonService : Service() {
      */
     @Volatile private var activeProfile: Profile = Profile.DEFAULT
 
+    /**
+     * True once startForeground has been accepted. Android refuses a
+     * connectedDevice foreground service when the app no longer holds USB
+     * permission, which is what unplugging the radio does, so the promotion is
+     * attempted only on a path that has something to run and only once.
+     */
+    @Volatile private var inForeground = false
+
     /** True while a stop or restart is tearing the daemon down, so its exit is not an error. */
     @Volatile private var teardown = false
     /** True between a successful launch and the process exiting. */
@@ -90,30 +99,42 @@ class DaemonService : Service() {
         scope.launch {
             combine(DaemonState.status, DaemonState.detail) { s, d -> s to d }.collect { (s, d) -> showNotification(s, d) }
         }
-        control.execute { Settings.warm(this) }
+        control.execute {
+            Settings.warm(this)
+            // The notification names the profile, and buildNotification can run
+            // before any start has captured one.
+            activeProfile = Profile.current(this)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // startForeground has to happen on this thread and soon after the start
-        // request, whatever the request turns out to be.
-        startInForeground()
-
         when (intent?.action) {
+            // No promotion on a stop. A stop arrives through startService rather
+            // than startForegroundService, so there is no deadline to meet, and
+            // promoting a service that is about to go away is what threw
+            // SecurityException when the radio had been unplugged. That is the
+            // path a profile switch takes.
             ACTION_STOP -> control.execute {
                 shutdown("Node stopped.")
                 stopSelf()
             }
-            ACTION_RESTART -> control.execute {
-                val dev = device
-                if (dev == null) {
-                    DaemonState.setStatus(NodeStatus.ERROR, "Nothing to restart: no radio is attached.")
-                    stopSelf()
-                } else {
-                    shutdown(null)
-                    startDaemon(dev)
+            ACTION_RESTART -> {
+                if (!startInForeground()) return START_NOT_STICKY
+                control.execute {
+                    val dev = device
+                    if (dev == null) {
+                        DaemonState.setStatus(NodeStatus.ERROR, "Nothing to restart: no radio is attached.")
+                        stopSelf()
+                    } else {
+                        shutdown(null)
+                        startDaemon(dev)
+                    }
                 }
             }
             else -> {
+                // This one comes from startForegroundService, so the promotion has
+                // to happen on this thread and promptly, before anything else.
+                if (!startInForeground()) return START_NOT_STICKY
                 @Suppress("DEPRECATION")
                 val dev: UsbDevice? = intent?.getParcelableExtra(UsbManager.EXTRA_DEVICE)
                 if (dev == null) { stopSelf(); return START_NOT_STICKY }
@@ -129,11 +150,32 @@ class DaemonService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun startInForeground() {
+    /**
+     * Promotes the service to the foreground, once per session. Returns false if
+     * the framework refused, having already reported it and stopped the service.
+     *
+     * The refusal is real rather than defensive: a connectedDevice foreground
+     * service needs the USB permission the app holds only while the device is
+     * attached, so a start attempted after the dongle has gone throws instead of
+     * returning.
+     */
+    private fun startInForeground(): Boolean {
+        if (inForeground) return true
         val n = buildNotification(DaemonState.status.value, DaemonState.detail.value)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
-            startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
-        else startForeground(NOTIF_ID, n)
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+                startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+            else startForeground(NOTIF_ID, n)
+            inForeground = true
+            true
+        } catch (e: Exception) {
+            DaemonState.appendLog("[meshdroid] Android refused the foreground service: ${e.message}")
+            DaemonState.setStatus(NodeStatus.ERROR,
+                "Android would not let the node run in the background. Plug the radio in and accept the USB prompt.")
+            control.execute { shutdown(null) }
+            stopSelf()
+            false
+        }
     }
 
     // ---- start ----
@@ -141,6 +183,11 @@ class DaemonService : Service() {
     /** Runs on the control thread. Opens USB, hands over the fd and launches the binary. */
     private fun startDaemon(dev: UsbDevice) {
         teardown = false
+        // First, before anything appends a line: the log parser needs to know
+        // whose patterns it is matching, and the two daemons share none.
+        val profile = Profile.current(this)
+        activeProfile = profile
+        DaemonState.setProfile(profile)
         DaemonState.beginSession("start " + java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date()))
         DaemonState.setStatus(NodeStatus.STARTING, "Opening USB radio…")
 
@@ -175,10 +222,6 @@ class DaemonService : Service() {
         } catch (e: Exception) {
             fail("Could not create the USB hand-off socket: ${e.message}"); return
         }
-
-        val profile = Profile.current(this)
-        activeProfile = profile
-        DaemonState.setProfile(profile)
 
         // With the proxy on, meshtasticd moves to loopback 4404 and Meshdroid owns
         // 4403. meshcored's listening port is compiled in (TCP_PORT), so there is
@@ -248,17 +291,17 @@ class DaemonService : Service() {
                 proxy = null
             }
         }
-        readStdout(p)
+        readStdout(p, profile)
         startWatchdog(profile, lan)
     }
 
-    private fun readStdout(p: Process) {
+    private fun readStdout(p: Process, profile: Profile) {
         Thread({
             // On stop the pipe closes while readLine() is blocked; that is expected.
             try {
                 p.inputStream.bufferedReader().forEachLine { line ->
                     DaemonState.appendLog(line)
-                    Log.i("meshtasticd", line)
+                    Log.i(profile.processName, line)
                 }
             } catch (e: Exception) {
                 if (!teardown) DaemonState.appendLog("[meshdroid] log stream ended: ${e.message}")
@@ -271,7 +314,7 @@ class DaemonService : Service() {
                     DaemonState.setStatus(NodeStatus.ERROR, "Daemon exited with code $code. See Logs.")
                 control.execute { shutdown(null); stopSelf() }
             }
-        }, "meshtasticd-stdout").apply { isDaemon = true; start() }
+        }, profile.processName + "-stdout").apply { isDaemon = true; start() }
     }
 
     /**
@@ -367,7 +410,8 @@ class DaemonService : Service() {
     }
 
     /**
-     * Signals any meshtasticd left over from a previous app process. If the app
+     * Signals any daemon left over from a previous app process, of either
+     * profile. If the app
      * crashes, the daemon child survives as an orphan holding the USB device and
      * the TCP port. Processes of the same UID are visible under /proc and can be
      * signalled, which is all this needs.
@@ -432,6 +476,7 @@ class DaemonService : Service() {
         runCatching { control.awaitTermination(3, TimeUnit.SECONDS) }
         scope.cancel()
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        inForeground = false
         DaemonState.setServiceAlive(false)
         super.onDestroy()
     }
@@ -455,7 +500,7 @@ class DaemonService : Service() {
         val title = when (status) {
             NodeStatus.STOPPED -> getString(R.string.status_stopped)
             NodeStatus.STARTING -> getString(R.string.status_starting)
-            NodeStatus.RUNNING -> getString(R.string.notif_running, activeProfile.clientPort)
+            NodeStatus.RUNNING -> getString(R.string.notif_running, activeProfile.displayName, activeProfile.clientPort)
             NodeStatus.STOPPING -> getString(R.string.status_stopping)
             NodeStatus.ERROR -> getString(R.string.status_error)
         }

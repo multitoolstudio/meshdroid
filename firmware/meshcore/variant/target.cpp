@@ -25,7 +25,15 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <ctime>
 #include <unistd.h>
+
+// Seconds after which a battery reading counts as absent. The same rule and the
+// same number as meshtasticd patch 0005: an app that has stopped writing the
+// file degrades to "no battery" rather than publishing a frozen percentage to
+// the mesh.
+#define MESHDROID_BATTERY_MAX_AGE_S 180
 
 MeshdroidBoard board;
 
@@ -94,14 +102,38 @@ uint16_t MeshdroidBoard::getBattMilliVolts() {
   FILE* f = fopen(path, "r");
   if (f == NULL) return 0;
 
-  unsigned int mv = 0;
-  int matched = fscanf(f, "%u", &mv);
+  char line[256];
+  char* got = fgets(line, sizeof(line), f);
   fclose(f);
-  if (matched != 1) return 0;
+  if (got == NULL) return 0;
+
+  // One line of key=value pairs in any order, written by the app's
+  // BatteryReporter and read by meshtasticd patch 0005 in the same format:
+  //
+  //   pct=87 mv=3980 charging=1 powered=1 ts=1757390000
+  //
+  // An earlier version of this function read the file with fscanf("%u"), which
+  // matches nothing against a line beginning "pct=", so MeshCore reported no
+  // battery on every call while the app showed reporting as on.
+  unsigned int mv = 0;
+  long ts = 0;
+  bool have_mv = false;
+  bool have_ts = false;
+  for (char* tok = strtok(line, " \t\r\n"); tok != NULL; tok = strtok(NULL, " \t\r\n")) {
+    if (sscanf(tok, "mv=%u", &mv) == 1) have_mv = true;
+    else if (sscanf(tok, "ts=%ld", &ts) == 1) have_ts = true;
+  }
+  if (!have_mv || !have_ts) return 0;
+
+  long age = (long)::time(NULL) - ts;
+  if (age > MESHDROID_BATTERY_MAX_AGE_S || age < -MESHDROID_BATTERY_MAX_AGE_S) return 0;
 
   // A plausible single-cell range. Anything outside it is a malformed file
   // rather than a real reading, and reporting nonsense to the app is worse
-  // than reporting nothing.
+  // than reporting nothing. Phones that do not report EXTRA_VOLTAGE write
+  // mv=0 and land here, which is deliberate: the percentage is visible in the
+  // app already, and a voltage the phone never measured is worse on the mesh
+  // than no voltage at all.
   if (mv < 2500 || mv > 4500) return 0;
   return (uint16_t)mv;
 }

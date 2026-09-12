@@ -31,6 +31,7 @@
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -43,6 +44,10 @@ class SocketSerialInterface : public BaseSerialInterface {
   int _client_fd = -1;
   uint16_t _port = 5000;
   char _bind_addr[64] = "0.0.0.0";
+
+  // How long a write waits for a client that has stopped reading before the
+  // client is dropped. See writeAll().
+  static const int WRITE_TIMEOUT_MS = 2000;
 
   uint8_t _state = ST_IDLE;
   uint16_t _frame_len = 0;
@@ -216,7 +221,27 @@ private:
       // raise SIGPIPE and kill the daemon outright.
       ssize_t w = ::send(_client_fd, p + sent, n - sent, MSG_NOSIGNAL);
       if (w > 0) { sent += (size_t)w; continue; }
-      if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) continue;
+      if (w < 0 && errno == EINTR) continue;
+
+      if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        // The socket is non-blocking, so a client that has stopped reading
+        // fills the send buffer and every send returns EAGAIN. Retrying
+        // straight away spins this loop at full speed on the daemon's only
+        // thread, which stops it servicing the radio and heats the phone. Wait
+        // for the socket to become writable instead, and drop a client that
+        // never does: a new connection evicts the old one anyway, so a client
+        // that comes back reconnects.
+        struct pollfd pfd;
+        pfd.fd = _client_fd;
+        pfd.events = POLLOUT;
+        pfd.revents = 0;
+        int r = ::poll(&pfd, 1, WRITE_TIMEOUT_MS);
+        if (r > 0 && (pfd.revents & POLLOUT)) continue;
+        if (r < 0 && errno == EINTR) continue;
+        closeClient(r == 0 ? "write timed out" : "poll failed");
+        return false;
+      }
+
       closeClient(w < 0 ? strerror(errno) : "short write");
       return false;
     }

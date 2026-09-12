@@ -61,14 +61,17 @@ echo ">> MeshCore at $( cd "$MC" && git describe --tags --always )"
 # MeshCore's top-level platformio.ini globs variants/*/platformio.ini, so the
 # env is picked up by living in the variant directory. target.h has to be there
 # too: MyMesh.h includes it as <target.h> and the env adds -I on this directory.
+#
+# Everything in variant/ is copied, rather than a list of filenames. The list
+# had already drifted: AndroidCompat.h and MeshdroidFS.h were missing from it,
+# and the build only worked because a desktop build had left copies in the
+# checkout. A clean checkout failed at the -include for AndroidCompat.h.
 mkdir -p "$MC/$VARIANT" "$MC/extra_scripts"
-cp "$ROOT/platformio-android.ini"            "$MC/$VARIANT/platformio.ini"
-cp "$ROOT/variant/target.h"                  "$MC/$VARIANT/target.h"
-cp "$ROOT/variant/target.cpp"                "$MC/$VARIANT/target.cpp"
-cp "$ROOT/variant/SocketSerialInterface.h"   "$MC/$VARIANT/SocketSerialInterface.h"
-cp "$ROOT/variant/USBHal.h"                  "$MC/$VARIANT/USBHal.h"
+cp "$ROOT/platformio-android.ini"              "$MC/$VARIANT/platformio.ini"
+cp "$ROOT"/variant/*                           "$MC/$VARIANT/"
 cp "$ROOT/extra_scripts/android_link_flags.py" "$MC/extra_scripts/"
 echo ">> variant installed at $MC/$VARIANT"
+ls "$MC/$VARIANT"
 
 # ---- 2. Install PlatformIO packages, then apply the patches -----------------
 # Packages first: the patches touch files inside downloaded libraries, which do
@@ -114,7 +117,10 @@ else
     # library directory names.
     if patch -p1 -d "$target" -R --dry-run --force --quiet < "$p" >/dev/null 2>&1; then
       echo ">> $name already applied"
-    elif patch -p1 -d "$target" --force --no-backup-if-mismatch < "$p"; then
+    # -F0: a patch that lands at a shifted offset produces a binary that
+    # builds, links and does not work, which has already cost a debugging
+    # session here. Refusing is the cheaper outcome.
+    elif patch -p1 -F0 -d "$target" --force --no-backup-if-mismatch < "$p"; then
       echo ">> applied $name to $target"
     else
       echo "!! $name failed to apply to $target"
@@ -160,11 +166,21 @@ echo ">> built $OUT"
 
 file "$OUT" | grep -q "ARM aarch64" || { echo "!! $OUT is not an aarch64 binary"; exit 1; }
 
-# Strings the app depends on, checked against the binary so a patch that
-# silently failed to apply cannot ship. Extend this list as the patches land.
-# grep searches the binary directly: piping "strings" into "grep -q" looks
-# tidier but fails under "set -o pipefail" whenever the match is found early.
-for s in "Using pre-opened CH341 fd" "Meshdroid MeshToad V3"; do
+# Strings checked against the binary so a patch that silently failed to apply
+# cannot ship. Extend this list as the patches land. grep searches the binary
+# directly: piping "strings" into "grep -q" looks tidier but fails under
+# "set -o pipefail" whenever the match is found early.
+#
+#   Using pre-opened CH341 fd   patch 0002, the usbfs descriptor hand-off
+#   MESHDROID_PATCH_0001_R1     patch 0001, the marker it adds to DataStore.cpp
+#   companion: listening on     patch 0001's main.cpp hunks, which are the only
+#                               reason SocketSerialInterface.h is compiled
+#   Meshdroid MeshToad V3       variant/target.h, so the variant was copied
+#
+# The first two are the ones that matter. Both of patch 0001's effects fail
+# silently: a node with no identity directory receives perfectly and cannot
+# sign an advert, and a node with no TCP interface listens on nothing.
+for s in "Using pre-opened CH341 fd" "MESHDROID_PATCH_0001_R1" "companion: listening on" "Meshdroid MeshToad V3"; do
   LC_ALL=C grep -qaF -- "$s" "$OUT" || {
     echo "!! built binary has no \"$s\" string; a patch did not make it into this build."
     exit 1

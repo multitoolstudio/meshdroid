@@ -57,6 +57,9 @@ private const val BBS_SETTINGS_ROUTE = "bbs_settings"
  * meshtasticd has. Mesh and BBS both talk to the daemon through MeshLink, which
  * is Meshtastic's protocol. Showing them under MeshCore would offer screens that
  * cannot work, so they are hidden rather than left to fail.
+ *
+ * Hiding a tab is only half of it. BbsHolder and MeshLinkHolder are process-wide
+ * and run whether or not a screen is open, so they check the profile themselves.
  */
 private enum class Tab(
     val route: String,
@@ -66,7 +69,7 @@ private enum class Tab(
 ) {
     NODE("node", R.string.tab_node, Icons.Filled.Hub),
     CONFIG("config", R.string.tab_config, Icons.Filled.Description, { it.hasConfigFile }),
-    MESH("mesh", R.string.tab_mesh, Icons.Filled.Forum, { it.supportsBbs }),
+    MESH("mesh", R.string.tab_mesh, Icons.Filled.Forum, { it.supportsMeshLink }),
     BBS("bbs", R.string.tab_bbs, Icons.Filled.Dashboard, { it.supportsBbs }),
     LOGS("logs", R.string.tab_logs, Icons.Filled.Terminal),
 }

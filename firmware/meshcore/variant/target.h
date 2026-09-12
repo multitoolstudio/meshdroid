@@ -32,10 +32,15 @@ class MeshdroidBoard : public mesh::MainBoard {
 public:
   void begin() { startup_reason = BD_STARTUP_NORMAL; }
 
-  // The phone's battery, not the dongle's. DaemonService writes millivolts to
-  // the file named by MESHCORE_BATTERY_FILE, the same arrangement meshtasticd
-  // patch 0005 uses. Returns 0 when the file is absent or unreadable, which is
-  // what MeshCore reports for a board with no battery sensing.
+  // The phone's battery, not the dongle's. The app writes one line of
+  // key=value pairs to the file named by MESHCORE_BATTERY_FILE, the same file
+  // and the same format meshtasticd patch 0005 reads:
+  //
+  //   pct=87 mv=3980 charging=1 powered=1 ts=1757390000
+  //
+  // Returns 0 when the file is absent, unreadable, stale, or carries no
+  // voltage, which is what MeshCore reports for a board with no battery
+  // sensing.
   uint16_t getBattMilliVolts() override;
 
   const char* getManufacturerName() const override { return "Meshdroid MeshToad V3"; }

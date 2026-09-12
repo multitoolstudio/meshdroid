@@ -34,7 +34,9 @@ import java.util.zip.ZipOutputStream
  */
 object NodeFiles {
     fun configFile(ctx: Context) = File(ctx.filesDir, "config.yaml")
-    fun fsDir(ctx: Context) = File(ctx.filesDir, "meshtasticd").apply { mkdirs() }
+    // Profile is the one place that knows where each daemon keeps its state, so
+    // this asks rather than repeating the directory name.
+    fun fsDir(ctx: Context) = Profile.MESHTASTIC.dataDir(ctx)
     fun prefsDir(ctx: Context) = File(fsDir(ctx), "prefs")
 
     /**

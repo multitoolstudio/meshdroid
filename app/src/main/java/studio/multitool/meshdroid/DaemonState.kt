@@ -14,7 +14,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 enum class NodeStatus { STOPPED, STARTING, RUNNING, STOPPING, ERROR }
 
 /**
- * Process-wide state shared between DaemonService and the Compose UI.
+ * Process-wide state shared between DaemonService and the Compose UI, for
+ * whichever daemon the active profile names.
  *
  * The service writes here (status, log lines); screens collect the StateFlows.
  * A plain object is used instead of a ViewModel because the state must outlive
@@ -156,16 +157,17 @@ object DaemonState {
                 setStatus(NodeStatus.ERROR, "Could not receive the USB descriptor from the app.")
         }
         if (profile == Profile.MESHCORE) { parseMeshCore(line); return }
+        // The CH341 lines are handled above, for both profiles, and are not
+        // repeated here.
         when {
             "Use nodenum 0x" in line -> Regex("nodenum 0x([0-9a-fA-F]+)").find(line)?.let { _nodeId.value = "!" + it.groupValues[1].lowercase() }
             line.contains("S:B:") -> Regex("S:B:\\d+,([^,]+),").find(line)?.let { _firmware.value = it.groupValues[1] }
-            "Using pre-opened CH341 fd" in line -> Regex("serial ([0-9A-Za-z]+)").find(line)?.let { _radioSerial.value = it.groupValues[1] }
             "init result 0" in line && _status.value == NodeStatus.STARTING -> setStatus(NodeStatus.RUNNING, "Radio initialised.")
             "API server binding" in line -> Regex("binding ([0-9.]+):").find(line)?.let { _bindAddr.value = it.groupValues[1] }
             "API server listen on TCP port" in line -> _detail.value = "Running. API on port ${Regex("port (\\d+)").find(line)?.groupValues?.get(1) ?: Settings.API_PORT}"
             "using UNSET" in line -> _regionUnset.value = true
             "Generate new PKI keys" in line || ("Set radio: region=" in line && "region=UNSET" !in line) -> _regionUnset.value = false
-            "Couldn't open LoRa USB device" in line || "Could not receive USB fd" in line -> setStatus(NodeStatus.ERROR, "Could not open the USB radio.")
+            "Couldn't open LoRa USB device" in line -> setStatus(NodeStatus.ERROR, "Could not open the USB radio.")
             "init result" in line && "result 0" !in line -> setStatus(NodeStatus.ERROR, line.trim().substringAfter("] "))
             line.startsWith("Portduino notneg") || line.startsWith("Portduino checkzero") ->
                 setStatus(NodeStatus.ERROR, line.substringAfter(": ").trim() +
@@ -222,10 +224,14 @@ object DaemonState {
  * first call on a background thread; everything after it is served from memory.
  */
 object Settings {
-    /** Port clients connect to. The proxy owns it when enabled, the daemon when not. */
+    /**
+     * Port Meshtastic clients connect to. The proxy owns it when enabled,
+     * meshtasticd when not. Each profile's own port is Profile.clientPort;
+     * this is here for the log lines that name a port before a profile is known.
+     */
     const val API_PORT = 4403
 
-    /** Loopback port the daemon listens on while the proxy owns API_PORT. */
+    /** Loopback port meshtasticd listens on while the proxy owns API_PORT. */
     const val DAEMON_PORT = 4404
     /** Seconds to wait for "init result 0" before telling the user to look at the log. */
     const val START_TIMEOUT_S = 30L
@@ -273,7 +279,6 @@ object Settings {
     fun bbsPrefix(ctx: Context) = prefs(ctx).getString("bbs_prefix", "!") ?: "!"
     fun setBbsPrefix(ctx: Context, v: String) = prefs(ctx).edit().putString("bbs_prefix", v.ifBlank { "!" }).apply()
 
-    /** Seconds before the same sender gets another reply. */
     /**
      * Require admin commands to arrive encrypted to this node's key. On by default: a
      * sender's node number is forgeable, so the admin table alone is not authentication.
@@ -289,6 +294,7 @@ object Settings {
     fun luaEnabled(ctx: Context): Set<String> = prefs(ctx).getStringSet("lua_enabled", emptySet()) ?: emptySet()
     fun setLuaEnabled(ctx: Context, v: Set<String>) = prefs(ctx).edit().putStringSet("lua_enabled", v).apply()
 
+    /** Seconds before the same sender gets another reply. */
     fun bbsCooldownSeconds(ctx: Context) = prefs(ctx).getInt("bbs_cooldown", 10)
     fun setBbsCooldownSeconds(ctx: Context, v: Int) = prefs(ctx).edit().putInt("bbs_cooldown", v).apply()
 

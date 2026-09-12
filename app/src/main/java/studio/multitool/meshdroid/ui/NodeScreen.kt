@@ -107,14 +107,20 @@ fun NodeScreen(
         lan = values[0]; autoStart = values[1]; batteryReport = values[2]; proxy = values[3]
         withContext(Dispatchers.IO) { Profile.current(ctx) }
     }
-    LaunchedEffect(configVersion) {
-        region = withContext(Dispatchers.IO) { runCatching { NodeFiles.readRegion(ctx) }.getOrNull() }
+    // Only for profiles with a config file: readRegion goes through readConfig,
+    // which writes the default config.yaml if none exists, and MeshCore has no
+    // use for one.
+    LaunchedEffect(configVersion, profile) {
+        region = if (!profile.hasConfigFile) null
+        else withContext(Dispatchers.IO) { runCatching { NodeFiles.readRegion(ctx) }.getOrNull() }
     }
 
     // Ask once per session when the daemon reports the region as unset and the YAML
     // has no Region key either. Dismissing with "Later" does not ask again until
     // the node is restarted.
-    LaunchedEffect(regionUnset, region) { if (regionUnset && region == null) askRegion = true }
+    LaunchedEffect(regionUnset, region, profile) {
+        if (profile.hasConfigFile && regionUnset && region == null) askRegion = true
+    }
 
     fun applyRegion(code: String) {
         regionMenu = false; askRegion = false
@@ -235,7 +241,12 @@ fun NodeScreen(
                 )
         }
 
-        SettingsSection(
+        // The region lives in config.yaml and is read by meshtasticd at boot
+        // through firmware patch 0003. MeshCore's frequency, bandwidth and
+        // spreading factor are compiled in, and its other settings are edited by
+        // the client over the companion protocol, so there is nothing here for it
+        // and writing a region would edit a file its daemon never opens.
+        if (profile.hasConfigFile) SettingsSection(
             title = stringResource(R.string.section_radio),
             summary = stringResource(R.string.section_radio_summary, region ?: stringResource(R.string.region_none)),
             initiallyExpanded = region == null
@@ -267,37 +278,55 @@ fun NodeScreen(
             )
         ) {
                 ListItem(
-                    headlineContent = { Text(stringResource(R.string.item_connection)) },
-                    supportingContent = { Text(stringResource(R.string.item_connection_detail, profile.clientPort)) }
-                )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text(stringResource(R.string.item_lan)) },
-                    supportingContent = { Text(stringResource(if (lan) R.string.item_lan_on else R.string.item_lan_off)) },
-                    trailingContent = {
-                        Switch(checked = lan, onCheckedChange = { v ->
-                            lan = v
-                            scope.launch {
-                                withContext(Dispatchers.IO) { Settings.setLanEnabled(ctx, v) }
-                                if (running) snackbar.showSnackbar(ctx.getString(R.string.snack_restart_to_apply))
-                            }
-                        })
+                    headlineContent = { Text(stringResource(R.string.item_connection, profile.displayName)) },
+                    supportingContent = {
+                        Text(stringResource(
+                            if (profile.canRestrictBind) R.string.item_connection_detail
+                            else R.string.item_connection_detail_open,
+                            profile.clientPort
+                        ))
                     }
                 )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text(stringResource(R.string.item_proxy)) },
-                    supportingContent = { Text(stringResource(if (proxy) R.string.item_proxy_on else R.string.item_proxy_off)) },
-                    trailingContent = {
-                        Switch(checked = proxy, onCheckedChange = { v ->
-                            proxy = v
-                            scope.launch {
-                                withContext(Dispatchers.IO) { Settings.setProxyEnabled(ctx, v) }
-                                if (running) snackbar.showSnackbar(ctx.getString(R.string.snack_restart_to_apply))
-                            }
-                        })
-                    }
-                )
+                // The LAN switch sets MESHTASTICD_BIND_ADDR. meshcored takes its bind
+                // address from TCP_BIND_ADDR, compiled in as 0.0.0.0, so under MeshCore
+                // the switch would move and nothing behind it would. Hidden until the
+                // daemon can be told where to bind; the row above says plainly that it
+                // is reachable from the LAN meanwhile.
+                if (profile.canRestrictBind) {
+                    HorizontalDivider()
+                    ListItem(
+                        headlineContent = { Text(stringResource(R.string.item_lan)) },
+                        supportingContent = { Text(stringResource(if (lan) R.string.item_lan_on else R.string.item_lan_off)) },
+                        trailingContent = {
+                            Switch(checked = lan, onCheckedChange = { v ->
+                                lan = v
+                                scope.launch {
+                                    withContext(Dispatchers.IO) { Settings.setLanEnabled(ctx, v) }
+                                    if (running) snackbar.showSnackbar(ctx.getString(R.string.snack_restart_to_apply))
+                                }
+                            })
+                        }
+                    )
+                }
+                // The proxy needs a second port to move the daemon to. meshcored's is
+                // compiled in as TCP_PORT, so there is nowhere to move it and
+                // DaemonService ignores the setting for that profile.
+                if (profile.supportsProxy) {
+                    HorizontalDivider()
+                    ListItem(
+                        headlineContent = { Text(stringResource(R.string.item_proxy)) },
+                        supportingContent = { Text(stringResource(if (proxy) R.string.item_proxy_on else R.string.item_proxy_off)) },
+                        trailingContent = {
+                            Switch(checked = proxy, onCheckedChange = { v ->
+                                proxy = v
+                                scope.launch {
+                                    withContext(Dispatchers.IO) { Settings.setProxyEnabled(ctx, v) }
+                                    if (running) snackbar.showSnackbar(ctx.getString(R.string.snack_restart_to_apply))
+                                }
+                            })
+                        }
+                    )
+                }
         }
 
         SettingsSection(
@@ -347,11 +376,19 @@ fun NodeScreen(
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(vertical = 8.dp)) {
                 ListItem(headlineContent = { Text(stringResource(R.string.item_files)) },
-                    supportingContent = { Text(stringResource(R.string.item_files_detail)) })
+                    supportingContent = {
+                        Text(stringResource(
+                            if (profile.hasConfigFile) R.string.item_files_detail
+                            else R.string.item_files_detail_meshcore
+                        ))
+                    })
                 Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = {
+                        // The profile is in the name because a restore refuses a backup
+                        // from the other one, and two files called meshdroid-backup
+                        // are told apart only by trying them.
                         val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
-                        exportBackup.launch("meshdroid-backup-$stamp.zip")
+                        exportBackup.launch("meshdroid-${profile.id}-$stamp.zip")
                     }) { Text(stringResource(R.string.btn_backup)) }
                     OutlinedButton(onClick = { pickBackup.launch(arrayOf("application/zip", "application/octet-stream")) }) {
                         Text(stringResource(R.string.btn_restore))
@@ -370,14 +407,17 @@ fun NodeScreen(
                 }
             }
         }
-        // Version footer. The firmware line names the commit the bundled daemon was
-        // built from; once the node is running, the status card shows the version
-        // the daemon itself reports.
+        // Version footer. The second line names the upstream the packaged daemon for
+        // this profile was built from; once the node is running, the status card
+        // shows the version the daemon itself reports.
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(stringResource(R.string.version_line, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(stringResource(R.string.version_daemon, BuildConfig.DAEMON_FIRMWARE_COMMIT),
+            Text(stringResource(
+                    if (profile.hasConfigFile) R.string.version_daemon else R.string.version_daemon_meshcore,
+                    profile.daemonBuild
+                ),
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Spacer(Modifier.height(40.dp))
@@ -409,7 +449,12 @@ fun NodeScreen(
         AlertDialog(
             onDismissRequest = { pendingRestore = null },
             title = { Text(stringResource(R.string.dialog_restore_title)) },
-            text = { Text(stringResource(R.string.dialog_restore_text)) },
+            text = {
+                Text(stringResource(
+                    if (profile.hasConfigFile) R.string.dialog_restore_text
+                    else R.string.dialog_restore_text_meshcore
+                ))
+            },
             confirmButton = { TextButton(onClick = { pendingRestore = null; runRestore(uri) }) { Text(stringResource(R.string.btn_restore_confirm)) } },
             dismissButton = { TextButton(onClick = { pendingRestore = null }) { Text(stringResource(R.string.btn_cancel)) } }
         )
@@ -443,7 +488,12 @@ fun NodeScreen(
     if (confirmReset) AlertDialog(
         onDismissRequest = { confirmReset = false },
         title = { Text(stringResource(R.string.dialog_reset_title)) },
-        text = { Text(stringResource(R.string.dialog_reset_text)) },
+        text = {
+            Text(stringResource(
+                if (profile.hasConfigFile) R.string.dialog_reset_text
+                else R.string.dialog_reset_text_meshcore
+            ))
+        },
         confirmButton = {
             TextButton(onClick = {
                 confirmReset = false

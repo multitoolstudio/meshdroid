@@ -67,6 +67,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Read before setContent. The bottom bar hides the tabs a profile does not
+        // support, and Profile.selected starts at the default until something reads
+        // the stored value, so leaving this to a LaunchedEffect painted Meshtastic's
+        // tab set for a frame or two on every MeshCore launch. One small
+        // SharedPreferences read, against a visible wrong first frame.
+        Profile.current(this)
         requestNotificationPermission()
         lifecycleScope.launch(Dispatchers.IO) { Settings.warm(this@MainActivity) }
         // The BBS follows the node and the setting, whether or not its tab is ever opened.

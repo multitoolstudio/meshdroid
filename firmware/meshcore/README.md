@@ -8,16 +8,14 @@ looks like. This file is about building it.
 
 ## State
 
-Working and confirmed on hardware: advert transmit, direct messages in both
-directions, ACKs and path discovery, with MeshCore Open attached over TCP to the
-desktop build driving a NullHop MeshToad V3.
+Shipping in 2.0.0. Confirmed on hardware with a NullHop MeshToad V3 on a
+Pixel 9 Pro: advert transmit, direct messages in both directions, ACKs and path
+discovery, with MeshCore Open attached over TCP on port 5000.
 
-Not yet wired into the app. `DaemonService` does not launch it and nothing
-passes `--fsdir`, so the daemon only runs by hand at present.
+`DaemonService` launches it as a profile, passes `--fsdir`, and parses its log
+lines. `Profile.kt` holds everything that differs between the two daemons.
 
 ## Building
-
-Android, which is what ships:
 
 ```
 export ANDROID_NDK_HOME=~/Android/Sdk/ndk/30.0.16138531
@@ -30,43 +28,36 @@ That installs `app/src/main/jniLibs/arm64-v8a/libmeshcored.so` and the NDK's
 `nativeLibraryDir` is the only place an unrooted app may `exec()` from, the same
 trick meshtasticd uses.
 
-Desktop, for testing against real hardware without an APK in the way:
+Use the same NDK for both daemons. Mixing versions produces linker errors weeks
+later with no obvious cause.
 
-```
-sudo dnf install libusb1-devel libi2c-devel libuv-devel gcc-c++
-./build-meshcored-linux.sh /path/to/meshcore-firmware
-~/meshcore-firmware/.pio/build/linux-x86_64/program --fsdir ~/.meshcored-test
-```
-
-Both environments live in `platformio-android.ini` and share one
-`[meshdroid_ch341]` section of hardware defines. That sharing is deliberate: a
-desktop build that quietly differed from the shipping one would prove nothing.
-
-The desktop build needs a udev rule for the CH341, since it opens the dongle
-through libusb rather than being handed a descriptor:
-
-```
-SUBSYSTEM=="usb", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="5512", \
-  MODE="0660", GROUP="plugdev", TAG+="uaccess"
-```
+A desktop environment used to live in `platformio-android.ini` and build the
+same sources against the host toolchain, for testing the CH341 HAL without an
+APK in the way. It did its job: it is how the missing `/identity` directory was
+found in one run. It was removed for 2.0.0, along with
+`build-meshcored-linux.sh`, because the daemon now runs inside the app and a
+second build path is a second place for the two to diverge. The git history has
+it if it is ever wanted again.
 
 ## Layout
 
 ```
 build-deps-android.sh          libusb, libuv, argp-standalone, libi2c for arm64
-build-meshcored-android.sh     the shipping build
-build-meshcored-linux.sh       the desktop test build
+build-meshcored-android.sh     the build
 make-patch-0001.py             regenerates patch 0001 against a new MeshCore pin
-platformio-android.ini         both environments and the shared defines
-extra_scripts/                 link-stage flags for the Android env
+platformio-android.ini         the env and the hardware defines
+extra_scripts/                 link-stage flags
 patches/                       what MeshCore needs that upstream does not have
 variant/                       everything that is ours, copied into the checkout
 docs/                          MeshCore protocol and radio reference
 ```
 
-`variant/` is copied to `variants/meshdroid_ch341/` in the MeshCore checkout by
-both build scripts. Nothing in it is patched into upstream, so it survives a
-version bump untouched:
+Everything in `variant/` is copied to `variants/meshdroid_ch341/` in the MeshCore
+checkout by the build script, with a glob rather than a list of filenames. The
+list had drifted: `AndroidCompat.h` and `MeshdroidFS.h` were missing from it, and
+the Android build only worked because a desktop build had left copies behind.
+Nothing in `variant/` is patched into upstream, so it survives a version bump
+untouched:
 
 | File | What it is |
 | ---- | ---------- |
@@ -78,15 +69,16 @@ version bump untouched:
 
 ## Patches
 
-`patches/0001-portduino-filesystem.patch` has seven hunks and is generated, not
+`patches/0001-portduino-filesystem.patch` has eight hunks and is generated, not
 hand-written. Run `./make-patch-0001.py /path/to/meshcore-firmware` after a
 MeshCore version bump rather than fixing rejects by hand; it anchors on exact
 strings and refuses rather than corrupting a file if upstream has moved.
 
 It adds a portduino branch to the filesystem selection in `IdentityStore.h`, the
 `DataStore` declaration and `setup()` bring-up in `main.cpp`,
-`formatFileSystem()` in `DataStore.cpp`, the `/identity` directory creation, and
-the declaration and registration of the TCP interface.
+`formatFileSystem()` in `DataStore.cpp`, the `/identity` directory creation, the
+declaration and registration of the TCP interface, and a marker string in
+`DataStore.cpp` that the build checks for.
 
 `patches/0002-libch341-android-fd.patch` is Meshdroid's existing meshtasticd
 patch: the daemon receives a usbfs descriptor over an abstract-namespace socket
@@ -94,13 +86,34 @@ and hands it to `libusb_wrap_sys_device()`, because an unrooted app cannot
 enumerate USB itself. Regenerate it by diffing a pristine extraction of the
 pinned libch341 commit against a patched one, so the context is exact.
 
-Both build scripts apply patches with `patch -F0`. Fuzz is an error on purpose:
+The build script applies patches with `patch -F0`. Fuzz is an error on purpose:
 a patch that lands at a shifted offset produces a binary that builds, links and
 does not work, and that has already happened once here.
 
+## Verification
+
+The build script greps the finished binary for strings that only exist if the
+patches applied, and refuses to install if any is missing. Extend that list as
+patches land. It has caught two real problems already, both of them cases where
+the build succeeded and the binary was wrong.
+
+| String | Proves |
+| ------ | ------ |
+| `Using pre-opened CH341 fd` | patch 0002, the usbfs descriptor hand-off |
+| `MESHDROID_PATCH_0001_R1` | patch 0001 reached the build |
+| `companion: listening on` | patch 0001's `main.cpp` hunks, which are the only reason `SocketSerialInterface.h` is compiled |
+| `Meshdroid MeshToad V3` | `variant/target.h`, so the variant was copied |
+
+The marker exists because both of patch 0001's effects fail silently. A node
+with no `/identity` directory receives perfectly and cannot sign an advert or
+complete an ACK, which reads as a transmit fault. A node with no TCP interface
+comes up and listens on nothing. Neither looks like a build problem. Bump the
+`_R1` suffix in `make-patch-0001.py` whenever the patch changes, so a stale
+patch is distinguishable from a missing one.
+
 ## The one setting that matters
 
-`SX126X_DIO2_AS_RF_SWITCH=true`, in the shared section.
+`SX126X_DIO2_AS_RF_SWITCH=true`, in the `[meshdroid_ch341]` section.
 
 DIO2 drives the E22P-915M30S front-end module's T/RCTRL pin, which selects the
 transmit path. `CustomSX1262::std_init` calls `setDio2AsRfSwitch()` under that
@@ -112,22 +125,35 @@ transmits nothing forever while still receiving normally and reporting correct
 airtime. Established on hardware before any of this was written; see
 `docs/openhop-radio-stack.md`.
 
-## Verification
+## Known upstream gaps
 
-Both build scripts grep the finished binary for strings that only exist if the
-patches applied, and refuse to install if any is missing. Extend that list as
-patches land. It has caught two real problems already, both of them cases where
-the build succeeded and the binary was wrong.
+Worth reporting to MeshCore.
 
-## Remaining work for 2.0.0
+`identity_store.begin()` is called under `#if defined(RP2040_PLATFORM)` only, so
+on any platform with a real directory tree `/identity` is never created, every
+identity write fails, and the node runs with no private key.
 
-App integration, the last piece. `DaemonService` becomes profile-driven and
-passes `--fsdir`, `DaemonState.parse` learns MeshCore's log lines,
-`NodeFiles` takes a profile parameter so backups stay separate, the Config tab
-edits `NodePrefs` fields rather than YAML, and switching profiles stops one
-daemon before starting the other.
+`ENABLE_ADVERT_ON_BOOT` is defined in `platformio.ini` and read nowhere. Grep
+every `.cpp` and `.h` and there is no consumer. A `companion_radio` node
+transmits only in response to `CMD_SEND_SELF_ADVERT` from a client, so a node
+with nothing attached is silent by design, which looks exactly like a broken
+radio.
 
-Worth doing at the same time: drop `helpers/sensors` from the source filter and
-stub `SensorManager`. The simulated I2C bus answers every probe, so each boot
-logs fifteen lines of sensors that do not exist, which makes the log harder to
-parse than it needs to be.
+## Remaining work
+
+Sensor log noise. The simulated I2C bus answers every probe, so each boot logs
+fifteen lines about sensors that do not exist. Dropping `helpers/sensors` from
+`[meshdroid_ch341].build_src_filter` needs a `SensorManager` stub carrying
+`querySensors()`, `node_lat` and `node_lon`, which `MyMesh.cpp` uses, and both
+`target.cpp` and `target.h` refer to `EnvironmentSensorManager`.
+
+A runtime bind address. `SocketSerialInterface::begin()` already takes one and
+patch 0001 passes the compiled-in `TCP_BIND_ADDR`, so a `getenv` inside `begin()`
+is all that stands between the app's LAN switch and MeshCore. The switch is
+hidden under MeshCore in 2.0.0 rather than left to look as though it does
+something.
+
+A config editor. MeshCore's settings are a `NodePrefs` struct the client edits
+over the companion protocol, so the Config tab has nothing to show and is hidden
+under MeshCore in 2.0.0. Users set frequency and the rest from the MeshCore app
+they are already running.

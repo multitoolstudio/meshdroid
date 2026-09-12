@@ -1,8 +1,20 @@
 diff --git a/examples/companion_radio/DataStore.cpp b/examples/companion_radio/DataStore.cpp
-index 06c56a7a..1319243e 100644
+index 06c56a7a..0694b3b0 100644
 --- a/examples/companion_radio/DataStore.cpp
 +++ b/examples/companion_radio/DataStore.cpp
-@@ -47,7 +47,9 @@ static File openWrite(FILESYSTEM* fs, const char* filename) {
+@@ -1,6 +1,11 @@
+ #include <Arduino.h>
+ #include "DataStore.h"
+ 
++#if defined(PORTDUINO_PLATFORM)
++// Meshdroid: proof that patch 0001 reached this build. See make-patch-0001.py.
++__attribute__((used)) static const char MESHDROID_PATCH_0001[] = "MESHDROID_PATCH_0001_R1";
++#endif
++
+ #if defined(EXTRAFS) || defined(QSPIFLASH)
+   #define MAX_BLOBRECS 100
+ #else
+@@ -47,7 +52,9 @@ static File openWrite(FILESYSTEM* fs, const char* filename) {
  #endif
  
  void DataStore::begin() {
@@ -13,7 +25,7 @@ index 06c56a7a..1319243e 100644
    identity_store.begin();
  #endif
  
-@@ -176,6 +178,13 @@ bool DataStore::formatFileSystem() {
+@@ -176,6 +183,13 @@ bool DataStore::formatFileSystem() {
    bool fs_success = ((fs::SPIFFSFS *)_fs)->format();
    esp_err_t nvs_err = nvs_flash_erase(); // no need to reinit, will be done by reboot
    return fs_success && (nvs_err == ESP_OK);
