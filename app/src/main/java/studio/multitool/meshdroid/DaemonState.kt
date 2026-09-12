@@ -76,6 +76,17 @@ object DaemonState {
 
     fun setServiceAlive(alive: Boolean) { _serviceAlive.value = alive }
 
+    /**
+     * The profile whose output is being parsed. Set by DaemonService at the start
+     * of a session, because the two daemons share no log lines at all and a parser
+     * reading meshtasticd's patterns in meshcored's output would leave the UI on
+     * "Starting..." forever.
+     */
+    @Volatile var profile: Profile = Profile.DEFAULT
+        private set
+
+    fun setProfile(p: Profile) { profile = p }
+
     fun setBattery(r: BatteryReporter.Reading?) { _battery.value = r }
 
     /** Clients attached to the proxy, or zero when the proxy is off. */
@@ -135,6 +146,16 @@ object DaemonState {
      * comes from the firmware or from patch 0001 or 0002; check them on each bump.
      */
     private fun parse(line: String) {
+        // Shared first: both daemons reach the radio through the same patched
+        // libch341, so these lines come from patch 0001/0002 rather than from
+        // either firmware.
+        when {
+            "Using pre-opened CH341 fd" in line ->
+                Regex("serial ([0-9A-Za-z]+)").find(line)?.let { _radioSerial.value = it.groupValues[1] }
+            "Could not receive USB fd" in line ->
+                setStatus(NodeStatus.ERROR, "Could not receive the USB descriptor from the app.")
+        }
+        if (profile == Profile.MESHCORE) { parseMeshCore(line); return }
         when {
             "Use nodenum 0x" in line -> Regex("nodenum 0x([0-9a-fA-F]+)").find(line)?.let { _nodeId.value = "!" + it.groupValues[1].lowercase() }
             line.contains("S:B:") -> Regex("S:B:\\d+,([^,]+),").find(line)?.let { _firmware.value = it.groupValues[1] }
@@ -149,6 +170,47 @@ object DaemonState {
             line.startsWith("Portduino notneg") || line.startsWith("Portduino checkzero") ->
                 setStatus(NodeStatus.ERROR, line.substringAfter(": ").trim() +
                     if ("bind" in line) ". Port ${Settings.API_PORT} is taken by another process." else "")
+        }
+    }
+
+    /**
+     * meshcored's log lines, which share nothing with meshtasticd's.
+     *
+     * There is no "init result 0": MeshCore's setup() halts if radio_init() fails,
+     * so reaching the point where the companion socket is listening means the radio
+     * came up and the transport is ready. That line is therefore the RUNNING signal.
+     *
+     * Every string here comes from MeshCore, from framework-portduino, or from
+     * variant/SocketSerialInterface.h and variant/target.cpp. Check them on a
+     * MeshCore version bump, the same as the meshtasticd patterns above.
+     */
+    private fun parseMeshCore(line: String) {
+        when {
+            "companion: listening on" in line -> {
+                val port = Regex(":(\\d+)").find(line)?.groupValues?.get(1)
+                if (_status.value == NodeStatus.STARTING)
+                    setStatus(NodeStatus.RUNNING, "Radio up. Companion on port ${port ?: Profile.MESHCORE.clientPort}.")
+            }
+            "companion: client connected" in line -> _detail.value = "Client connected."
+            "companion: client disconnected" in line ->
+                _detail.value = "Waiting for a client on port ${Profile.MESHCORE.clientPort}."
+
+            // target.cpp reports both of these before the daemon gives up.
+            "Could not open the CH341" in line || "No CH341 HAL" in line ->
+                setStatus(NodeStatus.ERROR, "Could not open the USB radio.")
+            "Could not open SPI" in line ->
+                setStatus(NodeStatus.ERROR, "Could not open the USB radio (SPI).")
+            "radio did not initialise" in line || "std_init" in line && "false" in line ->
+                setStatus(NodeStatus.ERROR, "The radio did not initialise. Check the antenna and the OTG cable.")
+
+            // An identity that will not save leaves the node unable to sign an advert
+            // or complete an ACK, which looks like a transmit fault. Surface it.
+            "IdentityStore::save() write - Err" in line ->
+                setStatus(NodeStatus.ERROR, "Could not save the node identity. Storage may be full.")
+
+            "companion: bind(" in line ->
+                setStatus(NodeStatus.ERROR,
+                    "Port ${Profile.MESHCORE.clientPort} is already in use by another process.")
         }
     }
 }
@@ -178,6 +240,14 @@ object Settings {
 
     /** Call once off the main thread to keep the first read off it. */
     fun warm(ctx: Context) { prefs(ctx) }
+
+    /**
+     * Which daemon the app runs. One radio and one USB descriptor, so exactly one
+     * at a time; switching stops the running daemon before starting the other.
+     * Read at launch, not live.
+     */
+    fun profileId(ctx: Context) = prefs(ctx).getString("profile", Profile.DEFAULT.id) ?: Profile.DEFAULT.id
+    fun setProfileId(ctx: Context, v: String) = prefs(ctx).edit().putString("profile", v).apply()
 
     fun lanEnabled(ctx: Context) = prefs(ctx).getBoolean("lan", false)
     fun setLanEnabled(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("lan", v).apply()

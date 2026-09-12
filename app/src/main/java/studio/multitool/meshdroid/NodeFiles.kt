@@ -11,12 +11,18 @@ import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 /**
- * File layout and file operations for the daemon.
+ * File layout and file operations for the daemons.
  *
- * Everything meshtasticd reads or writes lives under the app's filesDir:
+ * Everything either daemon reads or writes lives under the app's filesDir:
  *
  *   files/config.yaml            equivalent of /etc/meshtasticd/config.yaml
  *   files/meshtasticd/prefs/     equivalent of /var/lib/meshtasticd (node DB, keys, channels)
+ *   files/meshcore/              meshcored's portduino VFS root: identity/_main.id,
+ *                                new_prefs, contacts3, channels2, bl/
+ *
+ * MeshCore has no config file. Its settings are a NodePrefs struct the client
+ * edits over the companion protocol, so the Config tab has nothing to show for
+ * that profile.
  *
  * Android keeps that directory private to the app. This object is the only way
  * in or out: the Config tab edits the YAML, and backups move through the system
@@ -151,16 +157,54 @@ object NodeFiles {
     // ---- backup and restore ----
     // A backup zip holds config.yaml at the root and the prefs/ tree. The layout is
     // the same one meshtasticd uses on Linux, so backups are portable both ways.
-    fun exportBackup(ctx: Context, dest: Uri) {
+    /** Entry prefix for a MeshCore backup. Also how a restore recognises one. */
+    private const val MESHCORE_PREFIX = "meshcore/"
+
+    /**
+     * Which profile a backup zip belongs to, or null if it looks like neither.
+     *
+     * Backups taken before profiles existed have no marker, and are Meshtastic by
+     * construction, so config.yaml or prefs/ identifies them.
+     */
+    fun backupProfile(ctx: Context, src: Uri): Profile? {
+        ctx.contentResolver.openInputStream(src)!!.use { ins ->
+            ZipInputStream(ins).use { zip ->
+                var e = zip.nextEntry
+                while (e != null) {
+                    val n = e.name
+                    if (n.startsWith(MESHCORE_PREFIX)) return Profile.MESHCORE
+                    if (n == "config.yaml" || n.startsWith("prefs/")) return Profile.MESHTASTIC
+                    zip.closeEntry(); e = zip.nextEntry
+                }
+            }
+        }
+        return null
+    }
+
+    fun exportBackup(ctx: Context, dest: Uri, profile: Profile = Profile.current(ctx)) {
         ctx.contentResolver.openOutputStream(dest)!!.use { out ->
             ZipOutputStream(out).use { zip ->
-                val cfg = configFile(ctx)
-                if (cfg.exists()) { zip.putNextEntry(ZipEntry("config.yaml")); cfg.inputStream().use { it.copyTo(zip) }; zip.closeEntry() }
-                val prefs = prefsDir(ctx)
-                prefs.walkTopDown().filter { it.isFile }.forEach { f ->
-                    zip.putNextEntry(ZipEntry("prefs/" + f.relativeTo(prefs).path))
-                    f.inputStream().use { it.copyTo(zip) }
-                    zip.closeEntry()
+                when (profile) {
+                    Profile.MESHTASTIC -> {
+                        val cfg = configFile(ctx)
+                        if (cfg.exists()) { zip.putNextEntry(ZipEntry("config.yaml")); cfg.inputStream().use { it.copyTo(zip) }; zip.closeEntry() }
+                        val prefs = prefsDir(ctx)
+                        prefs.walkTopDown().filter { it.isFile }.forEach { f ->
+                            zip.putNextEntry(ZipEntry("prefs/" + f.relativeTo(prefs).path))
+                            f.inputStream().use { it.copyTo(zip) }
+                            zip.closeEntry()
+                        }
+                    }
+                    Profile.MESHCORE -> {
+                        // The whole VFS root. The identity is in here, so this file is
+                        // as sensitive as a private key, because it contains one.
+                        val root = profile.dataDir(ctx)
+                        root.walkTopDown().filter { it.isFile }.forEach { f ->
+                            zip.putNextEntry(ZipEntry(MESHCORE_PREFIX + f.relativeTo(root).path))
+                            f.inputStream().use { it.copyTo(zip) }
+                            zip.closeEntry()
+                        }
+                    }
                 }
             }
         }
@@ -175,7 +219,20 @@ object NodeFiles {
      *
      * The caller must have stopped the daemon and waited for it to exit.
      */
-    fun importBackup(ctx: Context, src: Uri): Int {
+    fun importBackup(ctx: Context, src: Uri, profile: Profile = Profile.current(ctx)): Int {
+        // Refused rather than merged. Restoring a MeshCore backup over a Meshtastic
+        // node, or the reverse, would delete the node's state and replace it with
+        // files the daemon cannot read.
+        val found = backupProfile(ctx, src)
+            ?: throw java.io.IOException("This zip does not look like a Meshdroid backup.")
+        if (found != profile) {
+            throw java.io.IOException(
+                "That is a ${found.displayName} backup and the active profile is " +
+                    "${profile.displayName}. Switch profile before restoring it."
+            )
+        }
+        if (profile == Profile.MESHCORE) return importMeshCoreBackup(ctx, src)
+
         val staged = mutableMapOf<File, ByteArray>()
         var total = 0L
         val prefs = prefsDir(ctx)
@@ -211,6 +268,48 @@ object NodeFiles {
         return staged.size
     }
 
+    /**
+     * Restores a MeshCore backup: the whole VFS root, replacing what is there.
+     *
+     * Same shape as the Meshtastic path. Nothing is written until the entire zip
+     * has been read, so a truncated or unreadable backup leaves the node
+     * untouched, and entries that resolve outside the root are skipped.
+     *
+     * The caller must have stopped the daemon and waited for it to exit.
+     */
+    private fun importMeshCoreBackup(ctx: Context, src: Uri): Int {
+        val root = Profile.MESHCORE.dataDir(ctx)
+        val rootPath = root.canonicalPath
+        val staged = mutableMapOf<File, ByteArray>()
+        var total = 0L
+
+        ctx.contentResolver.openInputStream(src)!!.use { ins ->
+            ZipInputStream(ins).use { zip ->
+                var e = zip.nextEntry
+                while (e != null) {
+                    val name = e.name
+                    if (!e.isDirectory && name.startsWith(MESHCORE_PREFIX)) {
+                        val target = File(root, name.removePrefix(MESHCORE_PREFIX))
+                        val path = runCatching { target.canonicalPath }.getOrNull()
+                        if (path != null && (path == rootPath || path.startsWith("$rootPath/"))) {
+                            val bytes = readCapped(zip)
+                            total += bytes.size
+                            if (total > MAX_TOTAL_BYTES)
+                                throw java.io.IOException("backup is larger than ${MAX_TOTAL_BYTES / (1024 * 1024)} MB")
+                            staged[target] = bytes
+                        }
+                    }
+                    zip.closeEntry(); e = zip.nextEntry
+                }
+            }
+        }
+        if (staged.isEmpty()) return 0
+
+        root.deleteRecursively()
+        staged.forEach { (target, bytes) -> writeAtomically(target, bytes) }
+        return staged.size
+    }
+
     private fun withinPrefs(target: File, prefsPath: String, ctx: Context): Boolean {
         if (target == configFile(ctx)) return true
         val path = runCatching { target.canonicalPath }.getOrNull() ?: return false
@@ -243,9 +342,23 @@ object NodeFiles {
     }
 
     /**
-     * Deletes the prefs/ tree: node database, channels, keys and identity. The daemon
-     * installs defaults on its next start. config.yaml is kept. The caller must have
-     * stopped the daemon and waited for it to exit.
+     * Factory reset for the active profile. The daemon installs defaults on its
+     * next start. The caller must have stopped the daemon and waited for it to
+     * exit.
+     *
+     * Meshtastic: deletes the prefs/ tree (node database, channels, keys and
+     * identity) and keeps config.yaml, because the pinmap in it describes the
+     * hardware rather than the node.
+     *
+     * MeshCore: deletes the whole VFS root, which is identity, prefs, contacts
+     * and channels. There is no config file to keep. Peers holding this node as a
+     * contact will see a stranger afterwards, which is what a factory reset means
+     * on an embedded board too.
      */
-    fun resetNode(ctx: Context) { prefsDir(ctx).deleteRecursively() }
+    fun resetNode(ctx: Context, profile: Profile = Profile.current(ctx)) {
+        when (profile) {
+            Profile.MESHTASTIC -> prefsDir(ctx).deleteRecursively()
+            Profile.MESHCORE -> profile.dataDir(ctx).deleteRecursively()
+        }
+    }
 }

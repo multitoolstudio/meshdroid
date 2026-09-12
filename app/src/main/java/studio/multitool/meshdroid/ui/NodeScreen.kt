@@ -49,6 +49,7 @@ import studio.multitool.meshdroid.BuildConfig
 import studio.multitool.meshdroid.DaemonState
 import studio.multitool.meshdroid.NodeFiles
 import studio.multitool.meshdroid.NodeStatus
+import studio.multitool.meshdroid.Profile
 import studio.multitool.meshdroid.R
 import studio.multitool.meshdroid.Settings
 import java.text.SimpleDateFormat
@@ -93,6 +94,9 @@ fun NodeScreen(
     var regionMenu by remember { mutableStateOf(false) }
     var askRegion by remember { mutableStateOf(false) }
     var pendingRestore by remember { mutableStateOf<android.net.Uri?>(null) }
+    val profile by Profile.selected.collectAsStateWithLifecycle()
+    var profileMenu by remember { mutableStateOf(false) }
+    var pendingProfile by remember { mutableStateOf<Profile?>(null) }
 
     // Settings and config.yaml are read off the main thread, and the region is read
     // again whenever config.yaml changes (an import, a restore, or the Config tab).
@@ -101,6 +105,7 @@ fun NodeScreen(
             listOf(Settings.lanEnabled(ctx), Settings.autoStart(ctx), Settings.batteryReport(ctx), Settings.proxyEnabled(ctx))
         }
         lan = values[0]; autoStart = values[1]; batteryReport = values[2]; proxy = values[3]
+        withContext(Dispatchers.IO) { Profile.current(ctx) }
     }
     LaunchedEffect(configVersion) {
         region = withContext(Dispatchers.IO) { runCatching { NodeFiles.readRegion(ctx) }.getOrNull() }
@@ -199,6 +204,38 @@ fun NodeScreen(
         }
 
         SettingsSection(
+            title = stringResource(R.string.section_protocol),
+            summary = stringResource(R.string.section_protocol_summary, profile.displayName),
+            initiallyExpanded = false
+        ) {
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.item_protocol)) },
+                    supportingContent = { Text(stringResource(R.string.item_protocol_detail, profile.clientPort)) },
+                    trailingContent = {
+                        Column {
+                            OutlinedButton(onClick = { profileMenu = true }) { Text(profile.displayName) }
+                            DropdownMenu(expanded = profileMenu, onDismissRequest = { profileMenu = false }) {
+                                Profile.installed(ctx).forEach { p ->
+                                    DropdownMenuItem(
+                                        text = { Text(p.displayName) },
+                                        onClick = {
+                                            profileMenu = false
+                                            if (p != profile) {
+                                                // Confirmed rather than switched on the spot: the running
+                                                // node has to stop, and anything connected to it drops.
+                                                if (running) pendingProfile = p
+                                                else scope.launch { withContext(Dispatchers.IO) { Profile.select(ctx, p) } }
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                )
+        }
+
+        SettingsSection(
             title = stringResource(R.string.section_radio),
             summary = stringResource(R.string.section_radio_summary, region ?: stringResource(R.string.region_none)),
             initiallyExpanded = region == null
@@ -224,13 +261,14 @@ fun NodeScreen(
         SettingsSection(
             title = stringResource(R.string.section_connections),
             summary = stringResource(
-                if (proxy) R.string.section_connections_shared else R.string.section_connections_single,
-                Settings.API_PORT
+                if (proxy && profile.supportsProxy) R.string.section_connections_shared
+                else R.string.section_connections_single,
+                profile.clientPort
             )
         ) {
                 ListItem(
                     headlineContent = { Text(stringResource(R.string.item_connection)) },
-                    supportingContent = { Text(stringResource(R.string.item_connection_detail, Settings.API_PORT)) }
+                    supportingContent = { Text(stringResource(R.string.item_connection_detail, profile.clientPort)) }
                 )
                 HorizontalDivider()
                 ListItem(
@@ -374,6 +412,31 @@ fun NodeScreen(
             text = { Text(stringResource(R.string.dialog_restore_text)) },
             confirmButton = { TextButton(onClick = { pendingRestore = null; runRestore(uri) }) { Text(stringResource(R.string.btn_restore_confirm)) } },
             dismissButton = { TextButton(onClick = { pendingRestore = null }) { Text(stringResource(R.string.btn_cancel)) } }
+        )
+    }
+
+    pendingProfile?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingProfile = null },
+            title = { Text(stringResource(R.string.dlg_switch_profile_title, target.displayName)) },
+            text = { Text(stringResource(R.string.dlg_switch_profile_body, profile.displayName, target.displayName)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingProfile = null
+                    scope.launch {
+                        onStop()
+                        // The daemon holds the radio and the USB descriptor, so the switch
+                        // waits for it to actually exit rather than just asking it to stop.
+                        if (!awaitStopped()) {
+                            snackbar.showSnackbar(ctx.getString(R.string.snack_stop_timeout))
+                            return@launch
+                        }
+                        withContext(Dispatchers.IO) { Profile.select(ctx, target) }
+                        snackbar.showSnackbar(ctx.getString(R.string.snack_profile_switched, target.displayName))
+                    }
+                }) { Text(stringResource(R.string.btn_switch)) }
+            },
+            dismissButton = { TextButton(onClick = { pendingProfile = null }) { Text(stringResource(R.string.btn_cancel)) } }
         )
     }
 

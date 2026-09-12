@@ -60,6 +60,13 @@ class DaemonService : Service() {
     private var battery: BatteryReporter? = null
     private var proxy: studio.multitool.meshdroid.mesh.MeshProxy? = null
 
+    /**
+     * The profile this session is running. Captured at start rather than read
+     * live, so a switch made while the daemon is up cannot make the shutdown
+     * path look for the wrong binary.
+     */
+    @Volatile private var activeProfile: Profile = Profile.DEFAULT
+
     /** True while a stop or restart is tearing the daemon down, so its exit is not an error. */
     @Volatile private var teardown = false
     /** True between a successful launch and the process exiting. */
@@ -169,27 +176,32 @@ class DaemonService : Service() {
             fail("Could not create the USB hand-off socket: ${e.message}"); return
         }
 
-        // With the proxy on, the daemon moves to loopback 4404 and Meshdroid owns 4403.
-        val useProxy = Settings.proxyEnabled(this)
-        val daemonPort = if (useProxy) Settings.DAEMON_PORT else Settings.API_PORT
+        val profile = Profile.current(this)
+        activeProfile = profile
+        DaemonState.setProfile(profile)
+
+        // With the proxy on, meshtasticd moves to loopback 4404 and Meshdroid owns
+        // 4403. meshcored's listening port is compiled in (TCP_PORT), so there is
+        // no second port to move it to and the proxy is not offered for it.
+        val useProxy = profile.supportsProxy && Settings.proxyEnabled(this)
+        val daemonPort = if (useProxy) Settings.DAEMON_PORT else profile.clientPort
 
         killStaleDaemons()
-        for (port in listOfNotNull(daemonPort, if (useProxy) Settings.API_PORT else null)) {
+        for (port in listOfNotNull(daemonPort, if (useProxy) profile.clientPort else null)) {
             if (!waitForFreePort(port)) {
                 fail("Port $port is already in use by another process (a leftover test daemon? run: adb shell pkill -f mtd).")
                 return
             }
         }
 
-        NodeFiles.ensureDefaultConfig(this)
-        val config = NodeFiles.configFile(this)
-        val fsDir = NodeFiles.fsDir(this)
-        val bin = File(applicationInfo.nativeLibraryDir, "libmeshtasticd.so")
-        if (!bin.exists()) { fail("Daemon binary missing from this build."); return }
-
-        val args = mutableListOf(bin.absolutePath, "-c", config.absolutePath, "-d", fsDir.absolutePath,
-            "-p", daemonPort.toString())
-        if (Settings.verbose(this)) args += "-v"
+        // Only meshtasticd reads a config file. MeshCore keeps its settings in a
+        // NodePrefs struct the client edits over the companion protocol.
+        if (profile.hasConfigFile) NodeFiles.ensureDefaultConfig(this)
+        if (!profile.isInstalled(this)) {
+            fail("${profile.displayName} is not included in this build of Meshdroid.")
+            return
+        }
+        val args = profile.argv(this, daemonPort)
 
         val lan = Settings.lanEnabled(this)
         val reportBattery = Settings.batteryReport(this)
@@ -203,15 +215,18 @@ class DaemonService : Service() {
             put("PINEDIO_USB_FD_SOCKET", socketName)
             put("HOME", filesDir.absolutePath)
             put("LD_LIBRARY_PATH", applicationInfo.nativeLibraryDir)   // libc++_shared.so is packaged beside the binary
-            // The daemon never binds beyond loopback when the proxy is in front of it;
-            // reaching the LAN is then the proxy's listener, not the daemon's.
-            put("MESHTASTICD_BIND_ADDR", if (lan && !useProxy) "0.0.0.0" else "127.0.0.1")
-            if (reportBattery) put("MESHTASTICD_BATTERY_FILE", batteryFile.absolutePath)
+            // A daemon behind the proxy never binds beyond loopback; reaching the LAN
+            // is then the proxy's listener, not the daemon's. Profiles that cannot be
+            // told where to bind ignore this.
+            val bindAddr = if (lan && !useProxy) "0.0.0.0" else "127.0.0.1"
+            putAll(profile.env(this@DaemonService, bindAddr, if (reportBattery) batteryFile else null))
         }
         DaemonState.appendLog(
-            "[meshdroid] starting meshtasticd on port $daemonPort, clients use ${Settings.API_PORT} " +
+            "[meshdroid] starting ${profile.displayName} on port $daemonPort, " +
+                "clients use ${profile.clientPort} " +
                 (if (useProxy) "through the proxy" else "directly") +
-                (if (lan) ", reachable from the LAN" else ", localhost only")
+                (if (!profile.canRestrictBind) ", reachable from the LAN (this daemon always binds every interface)"
+                 else if (lan) ", reachable from the LAN" else ", localhost only")
         )
 
         val p = try { pb.start() } catch (e: Exception) {
@@ -226,7 +241,7 @@ class DaemonService : Service() {
             // The proxy retries its upstream connection, so starting it before the daemon
             // has finished binding is fine.
             runCatching {
-                proxy = studio.multitool.meshdroid.mesh.MeshProxy(Settings.API_PORT, Settings.DAEMON_PORT, lan)
+                proxy = studio.multitool.meshdroid.mesh.MeshProxy(profile.clientPort, Settings.DAEMON_PORT, lan)
                     .also { it.start() }
             }.onFailure {
                 DaemonState.appendLog("[meshdroid] proxy failed to start: ${it.message}. Clients cannot reach the node.")
@@ -234,7 +249,7 @@ class DaemonService : Service() {
             }
         }
         readStdout(p)
-        startWatchdog(lan)
+        startWatchdog(profile, lan)
     }
 
     private fun readStdout(p: Process) {
@@ -250,7 +265,7 @@ class DaemonService : Service() {
             }
             val code = try { p.waitFor() } catch (_: InterruptedException) { -1 }
             daemonUp = false
-            DaemonState.appendLog("[meshdroid] meshtasticd exited with code $code")
+            DaemonState.appendLog("[meshdroid] ${activeProfile.displayName} exited with code $code")
             if (!teardown) {
                 if (DaemonState.status.value != NodeStatus.ERROR)
                     DaemonState.setStatus(NodeStatus.ERROR, "Daemon exited with code $code. See Logs.")
@@ -265,7 +280,7 @@ class DaemonService : Service() {
      * absence of the bind line from patch 0002 means the daemon is listening on
      * every interface whatever the LAN switch says.
      */
-    private fun startWatchdog(lanRequested: Boolean) {
+    private fun startWatchdog(profile: Profile, lanRequested: Boolean) {
         watchdog?.cancel()
         watchdog = scope.launch {
             delay(TimeUnit.SECONDS.toMillis(Settings.START_TIMEOUT_S))
@@ -274,7 +289,8 @@ class DaemonService : Service() {
                     "The radio may not be answering on SPI. Check the antenna, the OTG cable and the pinmap in the Config tab.")
                 DaemonState.setStatus(NodeStatus.STARTING, "Still starting after ${Settings.START_TIMEOUT_S}s. See Logs.")
             }
-            if (DaemonState.status.value == NodeStatus.RUNNING && DaemonState.bindAddr.value == null && !lanRequested) {
+            if (profile.canRestrictBind && DaemonState.status.value == NodeStatus.RUNNING &&
+                DaemonState.bindAddr.value == null && !lanRequested) {
                 DaemonState.appendLog("[meshdroid] warning: this daemon build never reported its bind address, " +
                     "so it was built without patch 0002 and is listening on every interface. " +
                     "Rebuild with firmware/build-meshtasticd-android.sh before relying on the LAN switch.")
@@ -340,7 +356,7 @@ class DaemonService : Service() {
         val me = android.os.Process.myPid()
         File("/proc").listFiles { f -> f.isDirectory && f.name.all { c -> c.isDigit() } }?.forEach { d ->
             val cmd = runCatching { File(d, "cmdline").readText() }.getOrNull() ?: return@forEach
-            if (!cmd.contains("libmeshtasticd.so")) return@forEach
+            if (!cmd.contains(activeProfile.binary)) return@forEach
             val stat = runCatching { File(d, "stat").readText() }.getOrNull() ?: return@forEach
             // "<pid> (<comm>) <state> <ppid> ...". comm can hold spaces and brackets,
             // so the fields are counted from the last closing bracket.
@@ -363,17 +379,19 @@ class DaemonService : Service() {
             val pid = d.name.toInt()
             if (pid == me) return@forEach
             val cmd = runCatching { File(d, "cmdline").readText() }.getOrNull() ?: return@forEach
-            if (cmd.contains("libmeshtasticd.so")) stale += pid
+            // Any profile's binary, not just this session's: a leftover from the
+            // other profile holds the same radio and would block this start.
+            if (Profile.entries.any { cmd.contains(it.binary) }) stale += pid
         }
         if (stale.isEmpty()) return
         stale.forEach {
-            DaemonState.appendLog("[meshdroid] signalling stale meshtasticd (pid $it) from a previous run")
+            DaemonState.appendLog("[meshdroid] signalling a stale daemon (pid $it) from a previous run")
             runCatching { android.os.Process.sendSignal(it, SIGTERM) }
         }
         // Give them a moment to flush, then make sure they are gone.
         Thread.sleep(1000)
         stale.filter { File("/proc/$it").exists() }.forEach {
-            DaemonState.appendLog("[meshdroid] killing stale meshtasticd (pid $it)")
+            DaemonState.appendLog("[meshdroid] killing stale daemon (pid $it)")
             runCatching { android.os.Process.killProcess(it) }
         }
     }
@@ -437,7 +455,7 @@ class DaemonService : Service() {
         val title = when (status) {
             NodeStatus.STOPPED -> getString(R.string.status_stopped)
             NodeStatus.STARTING -> getString(R.string.status_starting)
-            NodeStatus.RUNNING -> getString(R.string.notif_running, Settings.API_PORT)
+            NodeStatus.RUNNING -> getString(R.string.notif_running, activeProfile.clientPort)
             NodeStatus.STOPPING -> getString(R.string.status_stopping)
             NodeStatus.ERROR -> getString(R.string.status_error)
         }

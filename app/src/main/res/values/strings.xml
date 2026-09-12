@@ -212,4 +212,14 @@
     <string name="btn_clear">Clear</string>
     <string name="label_filter">Filter</string>
     <string name="label_line_count">%1$d lines</string>
+    <!-- Protocol / profile selection -->
+    <string name="section_protocol">Protocol</string>
+    <string name="section_protocol_summary">Running %1$s</string>
+    <string name="item_protocol">Mesh protocol</string>
+    <string name="item_protocol_detail">Clients connect on port %1$d</string>
+    <string name="dlg_switch_profile_title">Switch to %1$s?</string>
+    <string name="dlg_switch_profile_body">The %1$s node will be stopped and anything connected to it will disconnect. %2$s uses its own identity, contacts and settings; nothing is deleted, and switching back restores them.</string>
+    <string name="btn_switch">Switch</string>
+    <string name="snack_profile_switched">Switched to %1$s. Start the node to run it.</string>
+    <string name="snack_stop_timeout">The node did not stop in time. Try again.</string>
 </resources>
