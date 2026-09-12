@@ -29,10 +29,10 @@ MeshCore, as a second daemon the app can run instead of meshtasticd.
   do something. `meshcored` takes its bind address and its port at compile time,
   so the Connections card says plainly that it is reachable from the LAN instead
   of offering a switch that does not reach it.
-- The phone's battery reaches MeshCore. The daemon reads the same file
-  meshtasticd does, in the same format, with the same staleness rule, so an app
-  that stops writing it degrades to reporting no battery rather than a frozen
-  reading.
+- The battery file is shared. `meshcored` reads the same file `meshtasticd` does,
+  in the same format, with the same staleness rule, so an app that stops writing
+  it degrades to reporting no battery rather than a frozen reading. See the known
+  issue below for what still does not work.
 
 Fixes found in the 2.0.0 audit:
 
@@ -57,6 +57,18 @@ Fixes found in the 2.0.0 audit:
 The desktop build of `meshcored` and `build-meshcored-linux.sh` are gone. They
 existed to test the radio stack without an APK in the way, which the app now
 does; the git history has them if they are ever wanted again.
+
+Known issues:
+
+- **No battery reading under MeshCore.** MeshCore reports battery as a voltage
+  only, and `BatteryReporter` publishes a voltage only when the phone reports one
+  in a range it recognises, which not every phone does. Under Meshtastic this was
+  invisible, because the percentage is what goes on the mesh and firmware patch
+  0005 substitutes a mid-charge voltage for its own low-battery check. Due in
+  2.0.1.
+- **Fifteen lines of sensor noise on each MeshCore boot.** The simulated I2C bus
+  answers every probe, so the daemon reports sensors that do not exist. Cosmetic,
+  and it makes the log harder to read than it needs to be. Due in 2.0.1.
 
 ## 1.2.8
 

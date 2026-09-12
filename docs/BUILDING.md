@@ -1,10 +1,16 @@
 # Building Meshdroid
 
-The APK is built from three parts: the cross-compiled `meshtasticd`, a patched
-USB library inside it, and the Kotlin app. All of it is scripted. The Fedora
-instructions are the ones the project was developed and released on; the
-Debian and Arch sections follow the same steps with the matching package names
-and have not been fully tested yet.
+The APK is built from four parts: the cross-compiled `meshtasticd`, the
+cross-compiled `meshcored`, a patched USB library inside each, and the Kotlin
+app. All of it is scripted. The Fedora instructions are the ones the project was
+developed and released on; the Debian and Arch sections follow the same steps
+with the matching package names and have not been fully tested yet.
+
+Both daemons are optional at build time. The app lists only the protocols whose
+binary is actually present in the APK, so skipping the MeshCore build gives a
+working Meshtastic-only app with a single-entry Protocol picker. Skipping the
+Meshtastic build works the same way. Building neither gives an app that cannot
+start a node.
 
 ## Contents
 
@@ -17,6 +23,7 @@ and have not been fully tested yet.
 - [Optional: test the dongle on the host first](#optional-test-the-dongle-on-the-host-first)
 - [Build the dependencies](#build-the-dependencies)
 - [Build meshtasticd](#build-meshtasticd)
+- [Build meshcored](#build-meshcored)
 - [Smoke-test the binary](#smoke-test-the-binary)
 - [Build the app](#build-the-app)
 - [Updating the firmware](#updating-the-firmware)
@@ -234,6 +241,91 @@ If the build fails, the useful part of the output is the first `error:` block:
 cd ~/meshtastic-firmware && pio run -e android-arm64 2>&1 | grep -m3 -B3 -A10 "error:"
 ```
 
+## Build meshcored
+
+`meshcored` is MeshCore's `companion_radio` example, built for portduino against
+the same platform-native archive and the same NDK. Using one toolchain for both
+daemons is deliberate: a portduino problem found in one is the same problem in
+the other, and mixing NDK versions produces linker errors weeks later with no
+obvious cause.
+
+```bash
+git clone https://github.com/meshcore-dev/MeshCore.git ~/meshcore-firmware
+cd meshdroid/firmware/meshcore
+chmod +x *.sh make-patch-0001.py
+./build-deps-android.sh
+./build-meshcored-android.sh ~/meshcore-firmware
+```
+
+`build-deps-android.sh` here is a separate prefix from the meshtasticd one, since
+the two daemons need different libraries. It also takes around ten minutes and
+only needs running once per NDK version.
+
+`MC_TAG_DEFAULT` at the top of `build-meshcored-android.sh` pins the MeshCore
+tag, currently `companion-v1.17.1` (commit `d9296435`), and the script checks it
+out before building. `MC_TAG=keep` builds the checkout as it stands.
+
+The script copies everything in `variant/` and the PlatformIO env into
+`variants/meshdroid_ch341/` in the MeshCore checkout, installs the packages,
+applies the patches with `patch -F0`, runs `pio run -e android-arm64`, verifies
+the binary, and strips it into
+`app/src/main/jniLibs/arm64-v8a/libmeshcored.so`.
+
+Two guards will stop a build that seems fine, and both are there on purpose:
+
+- **`-F0` means fuzz is an error.** A patch that lands at a shifted offset
+  produces a binary that builds, links and does not work. If patch 0001 refuses,
+  regenerate it against the current checkout with
+  `./make-patch-0001.py ~/meshcore-firmware` rather than forcing it. The
+  generator anchors on exact strings and refuses rather than corrupting a file.
+- **The binary is searched for four strings**, each of which exists only if a
+  particular patch reached the build:
+
+  | String | Proves |
+  |---|---|
+  | `Using pre-opened CH341 fd` | patch 0002, the usbfs descriptor hand-off |
+  | `MESHDROID_PATCH_0001_R1` | patch 0001 reached the build |
+  | `companion: listening on` | patch 0001's `main.cpp` hunks |
+  | `Meshdroid MeshToad V3` | the variant was copied |
+
+  Both of patch 0001's effects fail silently. A node with no identity directory
+  receives perfectly and cannot sign an advert; a node with no TCP interface
+  listens on nothing. Neither looks like a build problem.
+
+If the MeshCore checkout ends up half patched:
+
+```bash
+cd ~/meshcore-firmware
+rm -f examples/companion_radio/*.rej examples/companion_radio/*.orig \
+      src/helpers/*.rej src/helpers/*.orig
+git checkout -- examples/ src/
+```
+
+### Changing MeshCore's radio settings
+
+They are compiled in, in the `[meshdroid_ch341]` section of
+`firmware/meshcore/platformio-android.ini`. The shipped values are MeshCore's
+United States and Canada preset: `LORA_FREQ=910.525`, `LORA_BW=62.5`,
+`LORA_SF=7`, `LORA_CR=5`. Frequency, bandwidth and spreading factor must match
+the rest of your mesh exactly or the radios cannot demodulate each other at all.
+Coding rate is read from each packet's header and need not match.
+
+Two settings in that section should not be changed casually:
+
+- `SX126X_DIO2_AS_RF_SWITCH=true`. DIO2 drives the E22P front-end module's
+  T/RCTRL pin, which selects the transmit path, and `SX126xReset.h` re-applies it
+  after calibration only inside that `#ifdef`. Without it the daemon sends one
+  advert, hits the first AGC reset, then transmits nothing forever while still
+  receiving normally and reporting correct airtime.
+- `LORA_TX_POWER=10`. This is the SX1262's drive level into the power amplifier,
+  not a reduction in radiated power. The E22P's PA needs roughly 10 to 13 dBm of
+  drive to reach its rated 30 dBm and more overdrives it. The board radiates about
+  a watt either way.
+
+Never configure CH341 GPIO 1 as a transmit enable. It drives the front-end
+module's `EN` pin, and doing so hangs the module until it is physically
+reconnected.
+
 ## Smoke-test the binary
 
 Runs the daemon on the phone with a simulated radio (`-s`). This exercises the
@@ -310,6 +402,18 @@ cd meshdroid/firmware && ./build-meshtasticd-android.sh ~/meshtastic-firmware
 Then rebuild the APK. If upstream changes something a patch touches, `patch`
 reports a rejected hunk; the patches are small and readable, and
 [ARCHITECTURE.md](ARCHITECTURE.md) describes what each one must accomplish.
+
+For MeshCore, bump `MC_TAG_DEFAULT` in
+`firmware/meshcore/build-meshcored-android.sh`, regenerate patch 0001 against the
+new tag with `make-patch-0001.py`, rebuild and test on a phone. Four pins move
+together and all four belong in `CHANGELOG.md`:
+
+| Pin | Where |
+|---|---|
+| meshtasticd firmware commit | `FW_COMMIT_DEFAULT` in `firmware/build-meshtasticd-android.sh` |
+| MeshCore tag | `MC_TAG_DEFAULT` in `firmware/meshcore/build-meshcored-android.sh` |
+| both, shown in the app | `DAEMON_FIRMWARE_COMMIT` and `MESHCORE_COMMIT` in `app/build.gradle.kts` |
+| the vendored protobufs | `app/src/main/proto/README.md` |
 
 ## Things that took time to learn
 

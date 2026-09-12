@@ -2,12 +2,16 @@
 
 ## The problem in one paragraph
 
-A CH341-based dongle such as the MeshToad is not a serial Meshtastic node. It
-is a USB-to-SPI bridge in front of an SX1262 transceiver; the Meshtastic
-firmware logic runs on whatever is driving it. On Linux that is `meshtasticd`,
-which talks to the CH341 from user space through libusb. Meshdroid makes the
-phone that host. Three things stand in the way on an unrooted Android device,
-and the design is the answer to each.
+A CH341-based dongle such as the MeshToad is not a serial mesh node. It is a
+USB-to-SPI bridge in front of an SX1262 transceiver; the mesh firmware logic
+runs on whatever is driving it. On Linux that is `meshtasticd`, which talks to
+the CH341 from user space through libusb. Meshdroid makes the phone that host.
+Three things stand in the way on an unrooted Android device, and the design is
+the answer to each.
+
+Since 2.0.0 there are two such daemons, `meshtasticd` and `meshcored`, and all
+three answers are shared between them. What differs is gathered in one file; see
+[Profiles](#profiles).
 
 ## Three obstacles, three answers
 
@@ -27,14 +31,51 @@ socket; the daemon connects to it on startup and receives the descriptor as
 
 **3. Where can a binary run from?** Unrooted apps may only `exec()` files under
 their `nativeLibraryDir`, which the package installer populates from
-`jniLibs/`. The daemon is therefore packaged as `libmeshtasticd.so` with
-`useLegacyPackaging` so it is extracted to disk, and the NDK's
-`libc++_shared.so` sits beside it.
+`jniLibs/`. Each daemon is therefore packaged as a `lib*.so`, `libmeshtasticd.so`
+and `libmeshcored.so`, with `useLegacyPackaging` so they are extracted to disk,
+and the NDK's `libc++_shared.so` sits beside them.
 
-Everything else is ordinary: the daemon exposes the standard Meshtastic TCP
-API on port 4403, and the official app connects to `127.0.0.1`.
+Everything else is ordinary: `meshtasticd` exposes the standard Meshtastic TCP
+API on port 4403 and the official app connects to `127.0.0.1`; `meshcored`
+exposes MeshCore's companion protocol on port 5000 and a MeshCore client
+connects the same way.
 
-## Firmware build
+## Profiles
+
+One radio and one USB descriptor, so exactly one daemon runs at a time.
+`Profile` is an enum with one entry per daemon, and it holds everything that
+differs between them: the binary, the data directory, the client port, the
+argument list, the environment, and which features apply.
+
+| | `MESHTASTIC` | `MESHCORE` |
+|---|---|---|
+| binary | `libmeshtasticd.so` | `libmeshcored.so` |
+| data directory | `files/meshtasticd` | `files/meshcore` |
+| client port | 4403 | 5000 |
+| argv | `-c config.yaml -d <dir> -p <port> [-v]` | `--fsdir <dir>` |
+| `supportsProxy` | yes | no, the port is compiled in |
+| `supportsMeshLink` | yes | no, different wire format |
+| `supportsBbs` | yes | not yet |
+| `hasConfigFile` | yes | no, settings live in a struct the client edits |
+| `canRestrictBind` | yes, `MESHTASTICD_BIND_ADDR` | no, `TCP_BIND_ADDR` is compiled in |
+| `supportsVerbose` | yes, `-v` | no, verbosity is a build flag |
+
+Adding a third daemon should mean an entry there and log patterns in
+`DaemonState`, not edits to `DaemonService`.
+
+Two consequences are easy to miss. `DaemonService` captures the profile once at
+the start of a session rather than reading it live, so a switch made while a
+daemon is up cannot make the shutdown path look for the wrong binary; and
+`killStaleDaemons` matches any profile's binary, because a leftover from the
+other profile holds the same radio.
+
+The UI hides the tabs a profile does not support, but hiding a tab only keeps a
+user off a screen. `BbsHolder` and `MeshLinkHolder` are process-wide and run
+whether or not a screen is open, so they check the profile themselves. Without
+that, an operator who had the BBS on under Meshtastic and switched to MeshCore
+would leave a reconnect loop running against a port nothing is listening on.
+
+## Firmware build: meshtasticd
 
 `meshtasticd` is the `native` (portduino) target of `meshtastic/firmware`.
 Building it for Android means cross-compiling with the NDK against bionic
@@ -178,6 +219,84 @@ reports the level otherwise, on portduino only.
 The trade is that other operators no longer see a plug icon for this node. They see
 a percentage, which happens to be climbing.
 
+## Firmware build: meshcored
+
+`meshcored` is MeshCore's `companion_radio` example built for portduino, from a
+variant that lives in this repository rather than upstream. Everything is under
+`firmware/meshcore/`; its `README.md` covers the build commands and the patch
+workflow.
+
+- `firmware/meshcore/platformio-android.ini` defines `[env:android-arm64]` on the
+  same platform-native archive `meshtasticd` uses, deliberately: one toolchain for
+  both daemons means a portduino problem found in one is the same problem in the
+  other. Its `[meshdroid_ch341]` section holds the pins, the radio class and the
+  radio parameters.
+- `firmware/meshcore/variant/` is copied into the MeshCore checkout at build time
+  and is never patched into upstream, so it survives a version bump. It holds
+  `target.h` and `target.cpp` (board, clock, radio), `USBHal.h` (the CH341
+  RadioLib HAL, vendored from meshtastic/firmware), `MeshdroidFS.h` (adapts
+  portduino's `fs::FS` to MeshCore's `FILESYSTEM`), `SocketSerialInterface.h`
+  (the companion protocol over a socket) and `AndroidCompat.h`.
+- `firmware/meshcore/patches/0001-portduino-filesystem.patch` is generated by
+  `make-patch-0001.py`, not hand-written. After a MeshCore bump, re-run the
+  generator rather than fixing rejects.
+- `firmware/meshcore/patches/0002-libch341-android-fd.patch` is the same patch as
+  meshtasticd's 0001, applied to the same library.
+
+Three settings in that env are worth knowing, because each of them was expensive
+to establish and none is visible from the code.
+
+`SX126X_DIO2_AS_RF_SWITCH=true` is the one the release rests on. DIO2 drives the
+E22P front-end module's T/RCTRL pin, which selects the transmit path, and
+`SX126xReset.h` re-applies it after calibration only inside that `#ifdef`.
+Without it the daemon sends its first advert, hits the first AGC reset, then
+transmits nothing forever while still receiving normally and reporting correct
+airtime.
+
+`LORA_TX_POWER=10` is a PA drive level, not a power reduction. The E22P's power
+amplifier needs roughly 10 to 13 dBm of drive to reach its rated 30 dBm, and more
+overdrives it. The board radiates about a watt either way, and Meshtastic's
+preset caps it at 10 for the same reason.
+
+The radio parameters are MeshCore's United States and Canada preset: 910.525 MHz,
+62.5 kHz, spreading factor 7, coding rate 4/5. Frequency, bandwidth and spreading
+factor must match the rest of the mesh exactly, with no degraded mode. Coding rate
+is read from each packet's header and need not match.
+
+### What patch 0001 does
+
+Upstream MeshCore selects its filesystem with `#if` chains covering ESP32, RP2040,
+NRF52 and STM32, each ending in an `#error` rather than a default, so a portduino
+build does not compile until a branch is added. The patch adds one in
+`IdentityStore.h`, declares the `DataStore` and brings it up in `setup()` in
+`main.cpp`, implements `formatFileSystem()` by deleting the data directory's
+contents, and registers the TCP companion interface.
+
+It also fixes an upstream gap: `identity_store.begin()` is called under
+`#if defined(RP2040_PLATFORM)` only, so on any platform with a real directory tree
+`/identity` is never created, every identity write fails, and the node runs with
+no private key. Such a node receives perfectly and cannot sign an advert or
+complete an ACK, which reads as a transmit fault rather than a storage one.
+
+The last hunk adds a marker string, `MESHDROID_PATCH_0001_R1`, which the build
+script greps out of the finished binary before installing it. Both of the patch's
+effects fail silently, so a binary that built cleanly without it is the failure
+mode worth guarding against.
+
+### The companion socket
+
+`SocketSerialInterface` implements MeshCore's `BaseSerialInterface` over a TCP
+socket, byte for byte the same receive state machine as the Arduino serial
+version, with `>` and `<` framing and a little-endian length. Port 5000 is what
+stock MeshCore clients expect of a WiFi companion, so an unmodified app finds the
+node with no special casing, the way 4403 works for `meshtasticd`.
+
+One client at a time, and a new connection evicts the old one, which matches both
+the firmware and openHop's server. The socket is non-blocking, so a client that
+stops reading fills the send buffer; writes wait on `poll` for it to become
+writable and drop a client that never does, rather than spinning the daemon's only
+thread.
+
 ## The app
 
 Kotlin, Jetpack Compose, Material 3. One module, no dependency injection.
@@ -185,9 +304,10 @@ Kotlin, Jetpack Compose, Material 3. One module, no dependency injection.
 | File | Role |
 |---|---|
 | `MainActivity.kt` | Finds the CH341 device, requests USB permission, handles the `USB_DEVICE_ATTACHED` launch intent, hosts the Compose UI. Start, Stop, Restart and Close are requests to the service. |
-| `DaemonService.kt` | Foreground service that owns the daemon process: opens USB, holds a wake lock, starts the fd socket, launches the binary, streams its stdout, tears down cleanly. Signals orphaned daemons from a crashed earlier run and waits for port 4403 before starting. Every transition runs on its own control thread. |
+| `Profile.kt` | The two daemons and everything that differs between them: binary, data directory, ports, argv, environment, and which features apply. |
+| `DaemonService.kt` | Foreground service that owns the daemon process: opens USB, holds a wake lock, starts the fd socket, launches the profile's binary, streams its stdout, tears down cleanly. Signals orphaned daemons of either profile from a crashed earlier run and waits for the port before starting. Every transition runs on its own control thread. |
 | `UsbFdServer.kt` | The abstract Unix socket that hands the USB descriptor to the daemon, after checking that the peer is this app. |
-| `DaemonState.kt` | Shared state: node status, a coalesced log buffer, values parsed from the log (node ID, firmware, serial, bind address, region unset). `Settings` holds the persisted switches. |
+| `DaemonState.kt` | Shared state: node status, a coalesced log buffer, values parsed from the log (node ID, firmware, serial, bind address, region unset). The parser splits three ways: the CH341 lines both daemons share, then Meshtastic's patterns or MeshCore's. `Settings` holds the persisted switches. |
 | `mesh/MeshLink.kt` | The transport interface and its domain types. Nothing above it sees a protobuf. |
 | `mesh/MeshtasticTcpLink.kt` | MeshLink over meshtasticd's TCP API: framing, the want_config handshake, heartbeats, reconnect. |
 | `mesh/StreamFrames.kt` | The 0x94 0xc3 length-prefixed framing, with resync. |
@@ -205,9 +325,9 @@ Kotlin, Jetpack Compose, Material 3. One module, no dependency injection.
 | `PhoneSensors.kt` | Runtime probe of the phone's environment sensors, and one-shot reads. |
 | `EnvironmentReporter.kt` | Publishes pressure and light over the mesh link on an interval. |
 | `BatteryReporter.kt` | Publishes the phone's battery percentage, voltage and charging state to the file the daemon reads. |
-| `NodeFiles.kt` | Paths, `config.yaml` read and write, the `Lora.Region` key, presets, backup and restore zips, log export, identity reset. All of it blocking, all of it called from a background dispatcher. |
-| `ui/App.kt` | Theme and the three-tab scaffold. |
-| `ui/NodeScreen.kt`, `ui/ConfigScreen.kt`, `ui/LogsScreen.kt` | The tabs. |
+| `NodeFiles.kt` | Paths, `config.yaml` read and write, the `Lora.Region` key, presets, per-profile backup and restore zips, log export, identity reset. All of it blocking, all of it called from a background dispatcher. |
+| `ui/App.kt` | Theme and the tab scaffold, filtered by what the active profile supports. |
+| `ui/NodeScreen.kt`, `ui/ConfigScreen.kt`, `ui/MeshScreen.kt`, `ui/BbsScreen.kt`, `ui/LogsScreen.kt` | The tabs. |
 
 Process model: the daemon is a separate OS process, so a crash inside it
 cannot take the app down, and the app can restart it. The service runs in the
@@ -223,12 +343,15 @@ meshtasticd's TCP API, which is the same interface the Meshtastic app uses: conn
 `config_complete_id` returns that nonce, then stay on the stream with a heartbeat every
 five minutes.
 
-The interface exists because at least two other implementations are planned. A MeshCore
-link speaks a different wire format entirely. A multiplexing proxy would hold the daemon's
-single client slot and fan the stream out to several local clients, so that the phone app
-and this link could both be connected; that is the piece that would let the BBS run
-without displacing the Meshtastic app. Neither should be visible above `MeshLink`, so the
-BBS and the phone sensor telemetry are written against the interface only.
+The interface exists because more than one implementation was expected. The multiplexing
+proxy arrived first: it holds the daemon's single client slot and fans the stream out to
+several local clients, so the phone app and this link can both be connected, which is what
+lets the BBS run without displacing the Meshtastic app. A MeshCore link is the other one,
+and it does not exist yet. 2.0.0 runs MeshCore as a second daemon that clients attach to
+directly, which is a different thing: the app does not speak MeshCore's companion protocol
+at all, and the Mesh and BBS tabs are hidden under that profile for exactly that reason.
+When a `MeshCoreLink` is written, nothing above `MeshLink` should have to change, which is
+why the BBS and the phone sensor telemetry are written against the interface only.
 
 `MeshProxy` is that piece, and it is on by default. The daemon listens on loopback 4404,
 Meshdroid owns 4403 and holds the daemon's one connection, and clients attach to Meshdroid.
@@ -257,6 +380,18 @@ builds the same Telemetry packet a sensor-equipped node would send. The second r
 nothing on a firmware bump and lets the published field set be a runtime decision, which
 suits hardware that varies as much as phone sensors do. The trade is that it only works
 while the link holds the daemon's client slot.
+
+The file route carries to MeshCore unchanged, because a file needs no protocol.
+`BatteryReporter` writes one line of key=value pairs and both daemons read it, with the same
+three-minute staleness rule, so an app that stops writing degrades to reporting no battery
+rather than leaving a frozen figure on the mesh.
+
+What does not carry is the shape of the reading. Meshtastic publishes a percentage and uses
+the voltage only for its low-battery check, where patch 0005 substitutes a mid-charge value
+when the host supplies none. MeshCore has only `getBattMilliVolts`, so a phone that does not
+report a voltage the app recognises produces no reading at all rather than a degraded one.
+That is the 2.0.0 known issue: the plumbing is in place and the voltage often is not. The
+fix is on the app side, in what `BatteryReporter` accepts as a voltage.
 
 ## The BBS
 
@@ -318,9 +453,17 @@ that relaxes it exists for meshes running without keys, and the UI states the co
 Start, stop and restart are intents to `DaemonService`, which posts each one to a
 single "daemon-control" thread. Serialising them there is what makes a restart
 safe: the teardown finishes before the next start begins, instead of racing it on
-a timer. `onStartCommand` itself only calls `startForeground` and returns, so none
-of the blocking work (scanning `/proc`, waiting for the port, opening USB,
-`ProcessBuilder.start`) happens on the main thread.
+a timer. `onStartCommand` itself only promotes the service to the foreground and
+returns, so none of the blocking work (scanning `/proc`, waiting for the port,
+opening USB, `ProcessBuilder.start`) happens on the main thread.
+
+The promotion is conditional, and that is not a defensive nicety. A
+`connectedDevice` foreground service needs the USB permission the app holds only
+while the device is attached, so promoting on a stop request after the dongle has
+gone throws `SecurityException` and takes the app with it. A stop arrives through
+`startService` rather than `startForegroundService`, so there is no deadline to
+meet on that path and none is attempted; a real start promotes, once per session,
+and reports a refusal rather than crashing.
 
 Two ownership details matter:
 
@@ -334,8 +477,10 @@ Two ownership details matter:
   to an app, so the name alone is not a secret.
 
 Stopping sends SIGTERM, waits, then falls back to `Process.destroy()`, which is a
-SIGKILL. Anything that replaces files under `prefs/`, meaning Restore and Reset
-identity, waits for the status to reach `Stopped` first.
+SIGKILL. Anything that replaces the node's files, meaning Restore, Reset identity
+and a protocol switch, waits for the status to reach `Stopped` first. A switch
+waits because the daemon holds the radio and the USB descriptor, so asking it to
+stop is not the same as it having stopped.
 
 The node is not restarted automatically after a crash or a reboot. The phone is
 the radio's host and a start needs a USB device the user has plugged in, so
@@ -350,11 +495,20 @@ the radio's host and a start needs a USB device the user has plugged in, so
     prefs/config.proto           radio and security config, including the keypair
     prefs/nodes.proto            node database
     prefs/channels.proto, device.proto, module.proto, ...
-  files/battery                  phone battery state for firmware patch 0005
-  shared_prefs/meshdroid.xml     app switches: lan, verbose, autostart, battery
+  files/meshcore/                meshcored --fsdir
+    identity/_main.id            the node's keypair
+    new_prefs, contacts3, channels2, bl/
+  files/battery                  phone battery state, read by both daemons
+  shared_prefs/meshdroid.xml     app switches: profile, lan, verbose, autostart, battery
 ```
 
-The daemon is launched as
+`meshtasticd` is launched as
 `libmeshtasticd.so -c files/config.yaml -d files/meshtasticd -p 4403 [-v]`
-with `PINEDIO_USB_FD_SOCKET`, `MESHTASTICD_BIND_ADDR`, `LD_LIBRARY_PATH` and
-`HOME` in its environment.
+with `PINEDIO_USB_FD_SOCKET`, `MESHTASTICD_BIND_ADDR`, `MESHTASTICD_BATTERY_FILE`,
+`LD_LIBRARY_PATH` and `HOME` in its environment.
+
+`meshcored` is launched as `libmeshcored.so --fsdir files/meshcore` with
+`PINEDIO_USB_FD_SOCKET`, `MESHCORE_BATTERY_FILE`, `LD_LIBRARY_PATH` and `HOME`.
+It takes no port: portduino parses `--fsdir` with argp before `setup()` runs, so
+the data directory is an argument rather than an environment variable, and the
+listening port is compiled in.
