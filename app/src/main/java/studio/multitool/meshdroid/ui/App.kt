@@ -20,6 +20,7 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -30,6 +31,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import studio.multitool.meshdroid.Profile
 import studio.multitool.meshdroid.R
 
 /** Material 3 theme: dynamic colour on Android 12+, a fixed green scheme below that. */
@@ -47,11 +50,27 @@ fun MeshdroidTheme(content: @Composable () -> Unit) {
 
 private const val BBS_SETTINGS_ROUTE = "bbs_settings"
 
-private enum class Tab(val route: String, val label: Int, val icon: ImageVector) {
+/**
+ * Bottom-bar destinations.
+ *
+ * Not every tab applies to every profile. Config edits config.yaml, which only
+ * meshtasticd has. Mesh and BBS both talk to the daemon through MeshLink, which
+ * is Meshtastic's protocol. Showing them under MeshCore would offer screens that
+ * cannot work, so they are hidden rather than left to fail.
+ *
+ * Hiding a tab is only half of it. BbsHolder and MeshLinkHolder are process-wide
+ * and run whether or not a screen is open, so they check the profile themselves.
+ */
+private enum class Tab(
+    val route: String,
+    val label: Int,
+    val icon: ImageVector,
+    val appliesTo: (Profile) -> Boolean = { true },
+) {
     NODE("node", R.string.tab_node, Icons.Filled.Hub),
-    CONFIG("config", R.string.tab_config, Icons.Filled.Description),
-    MESH("mesh", R.string.tab_mesh, Icons.Filled.Forum),
-    BBS("bbs", R.string.tab_bbs, Icons.Filled.Dashboard),
+    CONFIG("config", R.string.tab_config, Icons.Filled.Description, { it.hasConfigFile }),
+    MESH("mesh", R.string.tab_mesh, Icons.Filled.Forum, { it.supportsMeshLink }),
+    BBS("bbs", R.string.tab_bbs, Icons.Filled.Dashboard, { it.supportsBbs }),
     LOGS("logs", R.string.tab_logs, Icons.Filled.Terminal),
 }
 
@@ -68,11 +87,21 @@ fun MeshdroidApp(
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val current = backStack?.destination?.route
+    val profile by Profile.selected.collectAsStateWithLifecycle()
+    val tabs = Tab.entries.filter { it.appliesTo(profile) }
+
+    // Switching profile can hide the tab being looked at. Without this the user is
+    // left on a screen that has no way back and no bar entry highlighted.
+    LaunchedEffect(profile) {
+        if (current != null && tabs.none { it.route == current } && current != BBS_SETTINGS_ROUTE) {
+            nav.navigate(Tab.NODE.route) { popUpTo(Tab.NODE.route); launchSingleTop = true }
+        }
+    }
 
     Scaffold(
         bottomBar = {
             NavigationBar {
-                Tab.entries.forEach { t ->
+                tabs.forEach { t ->
                     val label = stringResource(t.label)
                     NavigationBarItem(
                         selected = current == t.route,

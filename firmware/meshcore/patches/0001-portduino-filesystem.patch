@@ -1,0 +1,119 @@
+diff --git a/examples/companion_radio/DataStore.cpp b/examples/companion_radio/DataStore.cpp
+index 06c56a7a..0694b3b0 100644
+--- a/examples/companion_radio/DataStore.cpp
++++ b/examples/companion_radio/DataStore.cpp
+@@ -1,6 +1,11 @@
+ #include <Arduino.h>
+ #include "DataStore.h"
+ 
++#if defined(PORTDUINO_PLATFORM)
++// Meshdroid: proof that patch 0001 reached this build. See make-patch-0001.py.
++__attribute__((used)) static const char MESHDROID_PATCH_0001[] = "MESHDROID_PATCH_0001_R1";
++#endif
++
+ #if defined(EXTRAFS) || defined(QSPIFLASH)
+   #define MAX_BLOBRECS 100
+ #else
+@@ -47,7 +52,9 @@ static File openWrite(FILESYSTEM* fs, const char* filename) {
+ #endif
+ 
+ void DataStore::begin() {
+-#if defined(RP2040_PLATFORM)
++#if defined(RP2040_PLATFORM) || defined(PORTDUINO_PLATFORM)
++  // Meshdroid: portduino's VFS is a real directory tree, so /identity has to be
++  // created before the first identity write, exactly as on RP2040's LittleFS.
+   identity_store.begin();
+ #endif
+ 
+@@ -176,6 +183,13 @@ bool DataStore::formatFileSystem() {
+   bool fs_success = ((fs::SPIFFSFS *)_fs)->format();
+   esp_err_t nvs_err = nvs_flash_erase(); // no need to reinit, will be done by reboot
+   return fs_success && (nvs_err == ESP_OK);
++#elif defined(PORTDUINO_PLATFORM)
++  // Meshdroid: the data directory belongs to the app, so there is nothing to
++  // reformat. Deleting every file at the root is the equivalent outcome:
++  // identity, prefs, contacts and channels all go, which is what a factory
++  // reset means on an embedded board. Peers holding this node as a contact will
++  // see a stranger afterwards, and that is intended here.
++  return _fs->removeAll();
+ #else
+   #error "need to implement format()"
+ #endif
+diff --git a/examples/companion_radio/main.cpp b/examples/companion_radio/main.cpp
+index 89f0e6cb..51163aaf 100644
+--- a/examples/companion_radio/main.cpp
++++ b/examples/companion_radio/main.cpp
+@@ -16,6 +16,13 @@ static uint32_t _atoi(const char* sp) {
+ #include <helpers/MultiSerialInterface.h>
+ MultiSerialInterface interface_manager;
+ 
++#if defined(MESHCORE_TCP_INTERFACE)
++  // Meshdroid: the companion protocol over TCP. Header-only and living in the
++  // variant directory, so it survives a MeshCore version bump untouched.
++  #include <SocketSerialInterface.h>
++  SocketSerialInterface tcp_interface;
++#endif
++
+ // include bluetooth interface
+ #if defined(BLE_PIN_CODE)
+   #ifdef ESP32
+@@ -85,6 +92,13 @@ MultiSerialInterface interface_manager;
+ #elif defined(ESP32)
+   #include <SPIFFS.h>
+   DataStore store(SPIFFS, rtc_clock);
++#elif defined(PORTDUINO_PLATFORM)
++  // Meshdroid: AppFS wraps portduino's global PortduinoFS, adding the
++  // three-argument open() and the format() that MeshCore expects. It is
++  // declared in MeshdroidFS.h, which the build force-includes ahead of
++  // everything so that FILESYSTEM is defined before IdentityStore.h's #if chain
++  // is reached.
++  DataStore store(AppFS, rtc_clock);
+ #endif
+ 
+ /* GLOBAL OBJECTS */
+@@ -180,10 +194,30 @@ void setup() {
+         false
+     #endif
+   );
++#elif defined(PORTDUINO_PLATFORM)
++  // Meshdroid: no filesystem bring-up. portduino's main() mounts the VFS root
++  // and creates the directory before it calls setup().
++  store.begin();
++  the_mesh.begin(
++    #ifdef DISPLAY_CLASS
++        disp != NULL
++    #else
++        false
++    #endif
++  );
+ #else
+   #error "need to define filesystem"
+ #endif
+ 
++// Meshdroid: add the TCP companion interface
++#if defined(MESHCORE_TCP_INTERFACE)
++  #ifndef TCP_BIND_ADDR
++    #define TCP_BIND_ADDR "0.0.0.0"
++  #endif
++  tcp_interface.begin(TCP_BIND_ADDR, TCP_PORT);
++  interface_manager.addInterface(InterfaceType::WiFi, &tcp_interface);
++#endif
++
+ // add bluetooth interface
+ #if defined(BLE_PIN_CODE)
+   bluetooth_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
+diff --git a/src/helpers/IdentityStore.h b/src/helpers/IdentityStore.h
+index d0d7ee45..38aa84bb 100644
+--- a/src/helpers/IdentityStore.h
++++ b/src/helpers/IdentityStore.h
+@@ -8,6 +8,10 @@
+   #define FILESYSTEM  Adafruit_LittleFS
+ 
+   using namespace Adafruit_LittleFS_Namespace;
++#elif defined(PORTDUINO_PLATFORM)
++  // Meshdroid: MeshdroidFS wraps framework-portduino's fs::FS, adding the
++  // three-argument open() and the format() that MeshCore expects.
++  #include <MeshdroidFS.h>
+ #endif
+ #include <Identity.h>
+ 

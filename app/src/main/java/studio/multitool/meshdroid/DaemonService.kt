@@ -31,7 +31,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * Foreground service that owns one meshtasticd process.
+ * Foreground service that owns one daemon process, the one the active profile
+ * names.
  *
  * Every transition (start, stop, restart) runs on the single "daemon-control"
  * thread, which serialises them and keeps blocking work off the main thread.
@@ -39,7 +40,7 @@ import java.util.concurrent.TimeUnit
  * does inline is startForeground, which the framework requires promptly.
  *
  * A start opens the USB device, acquires a wake lock, starts the fd hand-off
- * socket, then launches the daemon binary from nativeLibraryDir. A reader thread
+ * socket, then launches the profile's binary from nativeLibraryDir. A reader thread
  * forwards the daemon's stdout into DaemonState and to logcat. A stop signals
  * the daemon with SIGTERM, waits, then kills it, and releases everything in
  * reverse order.
@@ -59,6 +60,21 @@ class DaemonService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var battery: BatteryReporter? = null
     private var proxy: studio.multitool.meshdroid.mesh.MeshProxy? = null
+
+    /**
+     * The profile this session is running. Captured at start rather than read
+     * live, so a switch made while the daemon is up cannot make the shutdown
+     * path look for the wrong binary.
+     */
+    @Volatile private var activeProfile: Profile = Profile.DEFAULT
+
+    /**
+     * True once startForeground has been accepted. Android refuses a
+     * connectedDevice foreground service when the app no longer holds USB
+     * permission, which is what unplugging the radio does, so the promotion is
+     * attempted only on a path that has something to run and only once.
+     */
+    @Volatile private var inForeground = false
 
     /** True while a stop or restart is tearing the daemon down, so its exit is not an error. */
     @Volatile private var teardown = false
@@ -83,30 +99,42 @@ class DaemonService : Service() {
         scope.launch {
             combine(DaemonState.status, DaemonState.detail) { s, d -> s to d }.collect { (s, d) -> showNotification(s, d) }
         }
-        control.execute { Settings.warm(this) }
+        control.execute {
+            Settings.warm(this)
+            // The notification names the profile, and buildNotification can run
+            // before any start has captured one.
+            activeProfile = Profile.current(this)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // startForeground has to happen on this thread and soon after the start
-        // request, whatever the request turns out to be.
-        startInForeground()
-
         when (intent?.action) {
+            // No promotion on a stop. A stop arrives through startService rather
+            // than startForegroundService, so there is no deadline to meet, and
+            // promoting a service that is about to go away is what threw
+            // SecurityException when the radio had been unplugged. That is the
+            // path a profile switch takes.
             ACTION_STOP -> control.execute {
                 shutdown("Node stopped.")
                 stopSelf()
             }
-            ACTION_RESTART -> control.execute {
-                val dev = device
-                if (dev == null) {
-                    DaemonState.setStatus(NodeStatus.ERROR, "Nothing to restart: no radio is attached.")
-                    stopSelf()
-                } else {
-                    shutdown(null)
-                    startDaemon(dev)
+            ACTION_RESTART -> {
+                if (!startInForeground()) return START_NOT_STICKY
+                control.execute {
+                    val dev = device
+                    if (dev == null) {
+                        DaemonState.setStatus(NodeStatus.ERROR, "Nothing to restart: no radio is attached.")
+                        stopSelf()
+                    } else {
+                        shutdown(null)
+                        startDaemon(dev)
+                    }
                 }
             }
             else -> {
+                // This one comes from startForegroundService, so the promotion has
+                // to happen on this thread and promptly, before anything else.
+                if (!startInForeground()) return START_NOT_STICKY
                 @Suppress("DEPRECATION")
                 val dev: UsbDevice? = intent?.getParcelableExtra(UsbManager.EXTRA_DEVICE)
                 if (dev == null) { stopSelf(); return START_NOT_STICKY }
@@ -122,11 +150,32 @@ class DaemonService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun startInForeground() {
+    /**
+     * Promotes the service to the foreground, once per session. Returns false if
+     * the framework refused, having already reported it and stopped the service.
+     *
+     * The refusal is real rather than defensive: a connectedDevice foreground
+     * service needs the USB permission the app holds only while the device is
+     * attached, so a start attempted after the dongle has gone throws instead of
+     * returning.
+     */
+    private fun startInForeground(): Boolean {
+        if (inForeground) return true
         val n = buildNotification(DaemonState.status.value, DaemonState.detail.value)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
-            startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
-        else startForeground(NOTIF_ID, n)
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+                startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+            else startForeground(NOTIF_ID, n)
+            inForeground = true
+            true
+        } catch (e: Exception) {
+            DaemonState.appendLog("[meshdroid] Android refused the foreground service: ${e.message}")
+            DaemonState.setStatus(NodeStatus.ERROR,
+                "Android would not let the node run in the background. Plug the radio in and accept the USB prompt.")
+            control.execute { shutdown(null) }
+            stopSelf()
+            false
+        }
     }
 
     // ---- start ----
@@ -134,6 +183,11 @@ class DaemonService : Service() {
     /** Runs on the control thread. Opens USB, hands over the fd and launches the binary. */
     private fun startDaemon(dev: UsbDevice) {
         teardown = false
+        // First, before anything appends a line: the log parser needs to know
+        // whose patterns it is matching, and the two daemons share none.
+        val profile = Profile.current(this)
+        activeProfile = profile
+        DaemonState.setProfile(profile)
         DaemonState.beginSession("start " + java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date()))
         DaemonState.setStatus(NodeStatus.STARTING, "Opening USB radio…")
 
@@ -169,27 +223,28 @@ class DaemonService : Service() {
             fail("Could not create the USB hand-off socket: ${e.message}"); return
         }
 
-        // With the proxy on, the daemon moves to loopback 4404 and Meshdroid owns 4403.
-        val useProxy = Settings.proxyEnabled(this)
-        val daemonPort = if (useProxy) Settings.DAEMON_PORT else Settings.API_PORT
+        // With the proxy on, meshtasticd moves to loopback 4404 and Meshdroid owns
+        // 4403. meshcored's listening port is compiled in (TCP_PORT), so there is
+        // no second port to move it to and the proxy is not offered for it.
+        val useProxy = profile.supportsProxy && Settings.proxyEnabled(this)
+        val daemonPort = if (useProxy) Settings.DAEMON_PORT else profile.clientPort
 
         killStaleDaemons()
-        for (port in listOfNotNull(daemonPort, if (useProxy) Settings.API_PORT else null)) {
+        for (port in listOfNotNull(daemonPort, if (useProxy) profile.clientPort else null)) {
             if (!waitForFreePort(port)) {
                 fail("Port $port is already in use by another process (a leftover test daemon? run: adb shell pkill -f mtd).")
                 return
             }
         }
 
-        NodeFiles.ensureDefaultConfig(this)
-        val config = NodeFiles.configFile(this)
-        val fsDir = NodeFiles.fsDir(this)
-        val bin = File(applicationInfo.nativeLibraryDir, "libmeshtasticd.so")
-        if (!bin.exists()) { fail("Daemon binary missing from this build."); return }
-
-        val args = mutableListOf(bin.absolutePath, "-c", config.absolutePath, "-d", fsDir.absolutePath,
-            "-p", daemonPort.toString())
-        if (Settings.verbose(this)) args += "-v"
+        // Only meshtasticd reads a config file. MeshCore keeps its settings in a
+        // NodePrefs struct the client edits over the companion protocol.
+        if (profile.hasConfigFile) NodeFiles.ensureDefaultConfig(this)
+        if (!profile.isInstalled(this)) {
+            fail("${profile.displayName} is not included in this build of Meshdroid.")
+            return
+        }
+        val args = profile.argv(this, daemonPort)
 
         val lan = Settings.lanEnabled(this)
         val reportBattery = Settings.batteryReport(this)
@@ -203,15 +258,18 @@ class DaemonService : Service() {
             put("PINEDIO_USB_FD_SOCKET", socketName)
             put("HOME", filesDir.absolutePath)
             put("LD_LIBRARY_PATH", applicationInfo.nativeLibraryDir)   // libc++_shared.so is packaged beside the binary
-            // The daemon never binds beyond loopback when the proxy is in front of it;
-            // reaching the LAN is then the proxy's listener, not the daemon's.
-            put("MESHTASTICD_BIND_ADDR", if (lan && !useProxy) "0.0.0.0" else "127.0.0.1")
-            if (reportBattery) put("MESHTASTICD_BATTERY_FILE", batteryFile.absolutePath)
+            // A daemon behind the proxy never binds beyond loopback; reaching the LAN
+            // is then the proxy's listener, not the daemon's. Profiles that cannot be
+            // told where to bind ignore this.
+            val bindAddr = if (lan && !useProxy) "0.0.0.0" else "127.0.0.1"
+            putAll(profile.env(this@DaemonService, bindAddr, if (reportBattery) batteryFile else null))
         }
         DaemonState.appendLog(
-            "[meshdroid] starting meshtasticd on port $daemonPort, clients use ${Settings.API_PORT} " +
+            "[meshdroid] starting ${profile.displayName} on port $daemonPort, " +
+                "clients use ${profile.clientPort} " +
                 (if (useProxy) "through the proxy" else "directly") +
-                (if (lan) ", reachable from the LAN" else ", localhost only")
+                (if (!profile.canRestrictBind) ", reachable from the LAN (this daemon always binds every interface)"
+                 else if (lan) ", reachable from the LAN" else ", localhost only")
         )
 
         val p = try { pb.start() } catch (e: Exception) {
@@ -226,37 +284,37 @@ class DaemonService : Service() {
             // The proxy retries its upstream connection, so starting it before the daemon
             // has finished binding is fine.
             runCatching {
-                proxy = studio.multitool.meshdroid.mesh.MeshProxy(Settings.API_PORT, Settings.DAEMON_PORT, lan)
+                proxy = studio.multitool.meshdroid.mesh.MeshProxy(profile.clientPort, Settings.DAEMON_PORT, lan)
                     .also { it.start() }
             }.onFailure {
                 DaemonState.appendLog("[meshdroid] proxy failed to start: ${it.message}. Clients cannot reach the node.")
                 proxy = null
             }
         }
-        readStdout(p)
-        startWatchdog(lan)
+        readStdout(p, profile)
+        startWatchdog(profile, lan)
     }
 
-    private fun readStdout(p: Process) {
+    private fun readStdout(p: Process, profile: Profile) {
         Thread({
             // On stop the pipe closes while readLine() is blocked; that is expected.
             try {
                 p.inputStream.bufferedReader().forEachLine { line ->
                     DaemonState.appendLog(line)
-                    Log.i("meshtasticd", line)
+                    Log.i(profile.processName, line)
                 }
             } catch (e: Exception) {
                 if (!teardown) DaemonState.appendLog("[meshdroid] log stream ended: ${e.message}")
             }
             val code = try { p.waitFor() } catch (_: InterruptedException) { -1 }
             daemonUp = false
-            DaemonState.appendLog("[meshdroid] meshtasticd exited with code $code")
+            DaemonState.appendLog("[meshdroid] ${activeProfile.displayName} exited with code $code")
             if (!teardown) {
                 if (DaemonState.status.value != NodeStatus.ERROR)
                     DaemonState.setStatus(NodeStatus.ERROR, "Daemon exited with code $code. See Logs.")
                 control.execute { shutdown(null); stopSelf() }
             }
-        }, "meshtasticd-stdout").apply { isDaemon = true; start() }
+        }, profile.processName + "-stdout").apply { isDaemon = true; start() }
     }
 
     /**
@@ -265,7 +323,7 @@ class DaemonService : Service() {
      * absence of the bind line from patch 0002 means the daemon is listening on
      * every interface whatever the LAN switch says.
      */
-    private fun startWatchdog(lanRequested: Boolean) {
+    private fun startWatchdog(profile: Profile, lanRequested: Boolean) {
         watchdog?.cancel()
         watchdog = scope.launch {
             delay(TimeUnit.SECONDS.toMillis(Settings.START_TIMEOUT_S))
@@ -274,7 +332,8 @@ class DaemonService : Service() {
                     "The radio may not be answering on SPI. Check the antenna, the OTG cable and the pinmap in the Config tab.")
                 DaemonState.setStatus(NodeStatus.STARTING, "Still starting after ${Settings.START_TIMEOUT_S}s. See Logs.")
             }
-            if (DaemonState.status.value == NodeStatus.RUNNING && DaemonState.bindAddr.value == null && !lanRequested) {
+            if (profile.canRestrictBind && DaemonState.status.value == NodeStatus.RUNNING &&
+                DaemonState.bindAddr.value == null && !lanRequested) {
                 DaemonState.appendLog("[meshdroid] warning: this daemon build never reported its bind address, " +
                     "so it was built without patch 0002 and is listening on every interface. " +
                     "Rebuild with firmware/build-meshtasticd-android.sh before relying on the LAN switch.")
@@ -340,7 +399,7 @@ class DaemonService : Service() {
         val me = android.os.Process.myPid()
         File("/proc").listFiles { f -> f.isDirectory && f.name.all { c -> c.isDigit() } }?.forEach { d ->
             val cmd = runCatching { File(d, "cmdline").readText() }.getOrNull() ?: return@forEach
-            if (!cmd.contains("libmeshtasticd.so")) return@forEach
+            if (!cmd.contains(activeProfile.binary)) return@forEach
             val stat = runCatching { File(d, "stat").readText() }.getOrNull() ?: return@forEach
             // "<pid> (<comm>) <state> <ppid> ...". comm can hold spaces and brackets,
             // so the fields are counted from the last closing bracket.
@@ -351,7 +410,8 @@ class DaemonService : Service() {
     }
 
     /**
-     * Signals any meshtasticd left over from a previous app process. If the app
+     * Signals any daemon left over from a previous app process, of either
+     * profile. If the app
      * crashes, the daemon child survives as an orphan holding the USB device and
      * the TCP port. Processes of the same UID are visible under /proc and can be
      * signalled, which is all this needs.
@@ -363,17 +423,19 @@ class DaemonService : Service() {
             val pid = d.name.toInt()
             if (pid == me) return@forEach
             val cmd = runCatching { File(d, "cmdline").readText() }.getOrNull() ?: return@forEach
-            if (cmd.contains("libmeshtasticd.so")) stale += pid
+            // Any profile's binary, not just this session's: a leftover from the
+            // other profile holds the same radio and would block this start.
+            if (Profile.entries.any { cmd.contains(it.binary) }) stale += pid
         }
         if (stale.isEmpty()) return
         stale.forEach {
-            DaemonState.appendLog("[meshdroid] signalling stale meshtasticd (pid $it) from a previous run")
+            DaemonState.appendLog("[meshdroid] signalling a stale daemon (pid $it) from a previous run")
             runCatching { android.os.Process.sendSignal(it, SIGTERM) }
         }
         // Give them a moment to flush, then make sure they are gone.
         Thread.sleep(1000)
         stale.filter { File("/proc/$it").exists() }.forEach {
-            DaemonState.appendLog("[meshdroid] killing stale meshtasticd (pid $it)")
+            DaemonState.appendLog("[meshdroid] killing stale daemon (pid $it)")
             runCatching { android.os.Process.killProcess(it) }
         }
     }
@@ -414,6 +476,7 @@ class DaemonService : Service() {
         runCatching { control.awaitTermination(3, TimeUnit.SECONDS) }
         scope.cancel()
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        inForeground = false
         DaemonState.setServiceAlive(false)
         super.onDestroy()
     }
@@ -437,7 +500,7 @@ class DaemonService : Service() {
         val title = when (status) {
             NodeStatus.STOPPED -> getString(R.string.status_stopped)
             NodeStatus.STARTING -> getString(R.string.status_starting)
-            NodeStatus.RUNNING -> getString(R.string.notif_running, Settings.API_PORT)
+            NodeStatus.RUNNING -> getString(R.string.notif_running, activeProfile.displayName, activeProfile.clientPort)
             NodeStatus.STOPPING -> getString(R.string.status_stopping)
             NodeStatus.ERROR -> getString(R.string.status_error)
         }

@@ -29,14 +29,17 @@ android {
         applicationId = "studio.multitool.meshdroid"
         minSdk = 28
         targetSdk = 35
-        versionCode = 13
-        versionName = "1.2.8"
+        versionCode = 14
+        versionName = "2.0.0"
         ndk { abiFilters += listOf("arm64-v8a") }
 
-        // Shown at the bottom of the Node tab. The commit is the one pinned in
-        // firmware/build-meshtasticd-android.sh as FW_COMMIT_DEFAULT; keep the two
-        // in step when the daemon is rebuilt against a newer firmware.
+        // Shown at the bottom of the Node tab, whichever profile is selected.
+        // Each one is the pin in the build script that produces that binary:
+        // FW_COMMIT_DEFAULT in firmware/build-meshtasticd-android.sh, and
+        // MC_TAG_DEFAULT in firmware/meshcore/build-meshcored-android.sh. Keep
+        // each in step when that daemon is rebuilt.
         buildConfigField("String", "DAEMON_FIRMWARE_COMMIT", "\"fdb6730\"")
+        buildConfigField("String", "MESHCORE_COMMIT", "\"d9296435\"")
     }
 
     signingConfigs {
@@ -50,8 +53,9 @@ android {
         }
     }
 
-    // libmeshtasticd.so is really an executable; legacy packaging extracts it to
-    // nativeLibraryDir, the only place an unrooted app may exec() from.
+    // libmeshtasticd.so and libmeshcored.so are really executables; legacy
+    // packaging extracts them to nativeLibraryDir, the only place an unrooted app
+    // may exec() from.
     packaging { jniLibs { useLegacyPackaging = true } }
 
     buildTypes {

@@ -1,5 +1,75 @@
 # Changelog
 
+## 2.0.0
+
+MeshCore, as a second daemon the app can run instead of meshtasticd.
+
+- `meshcored` is built from meshcore-dev/MeshCore `companion-v1.17.1`
+  (`d9296435`) for Android arm64, and drives the same CH341 dongle through the
+  same patched libch341 and the same usbfs descriptor hand-off meshtasticd uses.
+  MeshCore clients attach over TCP on port 5000.
+- `Profile` is the abstraction the rest of the app hangs off: one enum, two
+  entries, each knowing its binary, data directory, client port, argument list,
+  environment, and which features apply to it. Adding a third daemon should mean
+  an entry there and log patterns in `DaemonState`, not edits to the service.
+- Switching profile stops the running node first and waits for it to exit, since
+  one radio and one USB descriptor means exactly one daemon at a time. Each
+  profile keeps its own identity, contacts and settings; switching back restores
+  them and nothing is deleted.
+- Backups are per profile. A Meshtastic backup is `config.yaml` plus `prefs/`,
+  matching what meshtasticd uses on Linux so backups stay portable. A MeshCore
+  backup is the whole data directory. A restore refuses a backup from the other
+  profile rather than replacing a working node with files its daemon cannot read,
+  and the backup filename now names the profile it came from.
+- The tabs a profile does not support are hidden: Config edits `config.yaml`,
+  which only meshtasticd has, and Mesh and BBS both speak Meshtastic's protocol.
+  The BBS and the mesh link also check the profile themselves rather than relying
+  on a hidden tab, so neither retries against a port nothing is listening on.
+- The LAN switch, the sharing proxy and the Verbose chip appear only where they
+  do something. `meshcored` takes its bind address and its port at compile time,
+  so the Connections card says plainly that it is reachable from the LAN instead
+  of offering a switch that does not reach it.
+- The battery file is shared. `meshcored` reads the same file `meshtasticd` does,
+  in the same format, with the same staleness rule, so an app that stops writing
+  it degrades to reporting no battery rather than a frozen reading. See the known
+  issue below for what still does not work.
+
+Fixes found in the 2.0.0 audit:
+
+- Stopping the node no longer crashes the app when the radio has been unplugged.
+  The service promoted itself to the foreground on every request including a
+  stop, and Android refuses a connectedDevice foreground service once the USB
+  permission is gone. That is the path a profile switch takes.
+- A client that stops reading no longer spins the MeshCore daemon's only thread
+  at full speed. The companion socket waits for the socket to become writable and
+  drops a client that never does.
+- The MeshCore build applies its patches with `patch -F0`, so a patch landing at
+  a shifted offset is an error rather than a binary that builds and does not
+  work, and it copies the whole `variant/` directory rather than a list of
+  filenames that had already drifted.
+- The build verifies patch 0001 reached the binary. Both of that patch's effects
+  fail silently: a node with no identity directory receives perfectly and cannot
+  sign an advert, and a node with no TCP interface listens on nothing.
+- The tab bar no longer paints Meshtastic's tabs for a frame on a MeshCore
+  launch, logcat is tagged with the daemon that produced the line, and the
+  version footer names the upstream the running daemon was built from.
+
+The desktop build of `meshcored` and `build-meshcored-linux.sh` are gone. They
+existed to test the radio stack without an APK in the way, which the app now
+does; the git history has them if they are ever wanted again.
+
+Known issues:
+
+- **No battery reading under MeshCore.** MeshCore reports battery as a voltage
+  only, and `BatteryReporter` publishes a voltage only when the phone reports one
+  in a range it recognises, which not every phone does. Under Meshtastic this was
+  invisible, because the percentage is what goes on the mesh and firmware patch
+  0005 substitutes a mid-charge voltage for its own low-battery check. Due in
+  2.0.1.
+- **Fifteen lines of sensor noise on each MeshCore boot.** The simulated I2C bus
+  answers every probe, so the daemon reports sensors that do not exist. Cosmetic,
+  and it makes the log harder to read than it needs to be. Due in 2.0.1.
+
 ## 1.2.8
 
 Imported BBS modules, written in Lua.

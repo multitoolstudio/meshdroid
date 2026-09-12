@@ -22,6 +22,8 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -46,6 +48,8 @@ import kotlinx.coroutines.withContext
 import androidx.compose.runtime.rememberCoroutineScope
 import studio.multitool.meshdroid.DaemonState
 import studio.multitool.meshdroid.NodeFiles
+import studio.multitool.meshdroid.NodeStatus
+import studio.multitool.meshdroid.Profile
 import studio.multitool.meshdroid.R
 import studio.multitool.meshdroid.Settings
 import java.text.SimpleDateFormat
@@ -61,6 +65,9 @@ fun LogsScreen() {
     var follow by remember { mutableStateOf(true) }
     var verbose by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    val profile by Profile.selected.collectAsStateWithLifecycle()
+    val status by DaemonState.status.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(Unit) { verbose = withContext(Dispatchers.IO) { Settings.verbose(ctx) } }
 
@@ -87,11 +94,21 @@ fun LogsScreen() {
             }) { Text(stringResource(R.string.btn_export)) }
             TextButton(onClick = { DaemonState.clearLog() }) { Text(stringResource(R.string.btn_clear)) }
             FilterChip(selected = follow, onClick = { follow = !follow }, label = { Text(stringResource(R.string.chip_follow)) })
-            FilterChip(selected = verbose, onClick = {
-                verbose = !verbose
-                val v = verbose
-                scope.launch { withContext(Dispatchers.IO) { Settings.setVerbose(ctx, v) } }
-            }, label = { Text(stringResource(R.string.chip_verbose)) })
+            // Verbosity is a command-line flag the daemon reads once at launch, so
+            // the chip does nothing until the next start. MeshCore takes no such
+            // flag: its verbosity is the MESH_DEBUG and MESH_PACKET_LOGGING build
+            // flags, so the chip is not offered there.
+            if (profile.supportsVerbose) {
+                FilterChip(selected = verbose, onClick = {
+                    verbose = !verbose
+                    val v = verbose
+                    scope.launch {
+                        withContext(Dispatchers.IO) { Settings.setVerbose(ctx, v) }
+                        if (status == NodeStatus.RUNNING)
+                            snackbar.showSnackbar(ctx.getString(R.string.snack_restart_to_apply))
+                    }
+                }, label = { Text(stringResource(R.string.chip_verbose)) })
+            }
         }
         OutlinedTextField(value = filter, onValueChange = { filter = it }, modifier = Modifier.fillMaxWidth(),
             singleLine = true, label = { Text(stringResource(R.string.label_filter)) })
@@ -119,5 +136,6 @@ fun LogsScreen() {
 
         Text(stringResource(R.string.label_line_count, shown.size),
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SnackbarHost(snackbar)
     }
 }

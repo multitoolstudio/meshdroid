@@ -4,6 +4,8 @@ app/src/main/jniLibs/arm64-v8a/*.so
 # Cross-built dependencies and their sources
 firmware/android-prefix/
 firmware/deps-src/
+firmware/meshcore/android-prefix/
+firmware/meshcore/deps-src/
 
 # Signing material. Never commit these.
 keystore.properties
@@ -32,3 +34,6 @@ AGENT-BRIEF.md
 
 # Agent handoff notes, working material rather than part of the project
 AGENT-BRIEF.md
+AGENT-BRIEF-2.0.0.md
+make-handoff.sh
+

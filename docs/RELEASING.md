@@ -33,7 +33,8 @@ git remote add github https://github.com/<org>/meshdroid.git
 git push -u github main
 ```
 
-`.gitignore` excludes the built binaries (`app/src/main/jniLibs/arm64-v8a/*.so`),
+`.gitignore` excludes the built binaries (`app/src/main/jniLibs/arm64-v8a/*.so`,
+which is both daemons and `libc++_shared.so`),
 the cross-built libraries (`firmware/android-prefix/`, `firmware/deps-src/`),
 Gradle and Studio state, and any signing material (`keystore.properties`,
 `*.jks`). It deliberately does not exclude `gradle/wrapper/gradle-wrapper.jar`:
@@ -72,14 +73,17 @@ Both live in `app/build.gradle.kts` under `defaultConfig`:
   release, otherwise the installer refuses to update over the previous
   version.
 
-Record what changed in `CHANGELOG.md`.
+Record what changed in `CHANGELOG.md`, including every pin that moved.
 
 ## Building the release APK
 
-1. Rebuild the daemon if the firmware or patches changed:
-   `cd firmware && ./build-meshtasticd-android.sh ~/meshtastic-firmware`.
-   The script prints the commit it built from at the end; that hash belongs in
-   the release notes, and it is the same one pinned in `FW_COMMIT_DEFAULT`.
+1. Rebuild whichever daemons changed:
+   `cd firmware && ./build-meshtasticd-android.sh ~/meshtastic-firmware`, and
+   `cd firmware/meshcore && ./build-meshcored-android.sh ~/meshcore-firmware`.
+   Each prints what it built from at the end; both belong in the release notes,
+   and they are the same values pinned in `FW_COMMIT_DEFAULT` and
+   `MC_TAG_DEFAULT`. A release APK must contain both binaries, even though a
+   development build works with either alone.
 2. Bump `versionCode` and `versionName`.
 3. Android Studio: Build > Generate Signed App Bundle / APK > APK >
    release. Or from a terminal, with the wrapper that ships in the repository:
@@ -91,22 +95,30 @@ Record what changed in `CHANGELOG.md`.
 
 ## Release checklist
 
-- [ ] Firmware rebuilt from the pinned commit; hash recorded in `CHANGELOG.md`
-      and the release notes
-- [ ] Build script's binary check passed (it fails the build if `API server
-      binding` or `Using pre-opened CH341 fd` is missing, which means a patch
-      did not reach the binary)
-- [ ] `versionCode` incremented, `versionName` updated
+- [ ] Both daemons rebuilt from their pinned upstreams; both recorded in
+      `CHANGELOG.md` and the release notes
+- [ ] Both build scripts' binary checks passed. They fail the build when a string
+      that only exists if a patch applied is missing from the binary:
+      `API server binding` and `Using pre-opened CH341 fd` for meshtasticd,
+      and `Using pre-opened CH341 fd`, `MESHDROID_PATCH_0001_R1`,
+      `companion: listening on` and `Meshdroid MeshToad V3` for meshcored
+- [ ] `versionCode` incremented, `versionName` updated,
+      `DAEMON_FIRMWARE_COMMIT` and `MESHCORE_COMMIT` match the pins in the two
+      build scripts
 - [ ] `CHANGELOG.md` updated
 - [ ] Release APK built, signed with the project key, installed and tested on
       a phone: fresh install and update over the previous version
-- [ ] With the LAN switch off, the log shows `API server binding 127.0.0.1:4403`
-      and no bind-address warning from Meshdroid
+- [ ] Both protocols start, reach *Node running*, and accept their own phone app
+- [ ] Switching protocol with the node running stops it and starts the other one;
+      switching with the radio unplugged does not crash the app
+- [ ] With the LAN switch off under Meshtastic, the log shows
+      `API server binding 127.0.0.1:4403` and no bind-address warning
 - [ ] Stop, Restart and Close Meshdroid each leave no daemon behind:
-      `adb shell ps -A | grep meshtasticd` comes back empty
+      `adb shell ps -A | grep -E 'meshtasticd|meshcored'` comes back empty
 - [ ] Git tag `v<versionName>` pushed
-- [ ] Release created on the git host with the APK attached, the firmware
-      commit hash, and a link to the patches in `firmware/`
+- [ ] Release created on the git host with the APK attached, both upstream
+      versions, and a link to the patches in `firmware/` and
+      `firmware/meshcore/patches/`
 
 ## Licence obligations
 
@@ -118,6 +130,14 @@ reproduce the binary from the named upstream commit, the patches and the build
 scripts. Pinning the commit in `build-meshtasticd-android.sh` is part of that
 promise, since a build of whatever `master` was on a given day is not
 reproducible later.
+
+`meshcored` is built from meshcore-dev/MeshCore, which is MIT, so redistribution
+imposes less. Two things in it are GPL-3.0 regardless: Meshdroid's own patches
+and variant, and `firmware/meshcore/variant/USBHal.h`, which is vendored from
+meshtastic/firmware. The same promise therefore applies to it in practice, and
+the tag is pinned in `build-meshcored-android.sh` for the same reason. MIT into
+GPL-3 is the direction that works; the reverse is not, which is why the CH341 HAL
+being GPL is a note about this binary rather than a problem.
 
 The APK also ships the NDK's `libc++_shared.so`, which is part of the LLVM
 project and carries the Apache 2.0 licence with LLVM exceptions. It is

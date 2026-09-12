@@ -5,11 +5,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import android.content.Context
 import studio.multitool.meshdroid.DaemonState
 import studio.multitool.meshdroid.EnvironmentReporter
 import studio.multitool.meshdroid.NodeStatus
+import studio.multitool.meshdroid.Profile
 
 /**
  * Process-wide owner of the mesh link, so the connection survives tab switches and
@@ -35,9 +37,11 @@ object MeshLinkHolder {
         private set
 
     /**
-     * Collects events into the history, and drops the link when the node stops. Without
-     * that second part the reconnect loop would sit there widening its backoff against a
-     * daemon that is not coming back until the user starts it again.
+     * Collects events into the history, and drops the link when the node stops or the
+     * active profile cannot carry it. Without that second part the reconnect loop would
+     * sit there widening its backoff against a daemon that is not coming back until the
+     * user starts it again, or against a MeshCore daemon that does not speak this
+     * protocol and never will on this port.
      */
     fun init(ctx: Context) {
         if (started) return
@@ -49,8 +53,9 @@ object MeshLinkHolder {
             }
         }
         scope.launch {
-            DaemonState.status.collect { s ->
-                if (s != NodeStatus.RUNNING && link.status.value != LinkStatus.DISCONNECTED) link.stop()
+            combine(DaemonState.status, Profile.selected) { s, p -> s to p }.collect { (s, p) ->
+                val usable = s == NodeStatus.RUNNING && p.supportsMeshLink
+                if (!usable && link.status.value != LinkStatus.DISCONNECTED) link.stop()
             }
         }
     }

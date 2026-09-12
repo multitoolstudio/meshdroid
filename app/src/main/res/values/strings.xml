@@ -3,7 +3,7 @@
 
     <!-- Foreground service notification -->
     <string name="channel_node_status">Node status</string>
-    <string name="notif_running">Node running · 127.0.0.1:%1$d</string>
+    <string name="notif_running">%1$s node running · port %2$d</string>
     <string name="action_stop_node">Stop node</string>
 
     <!-- Node status -->
@@ -130,8 +130,9 @@
     <string name="item_region_set">%1$s. Seeds a new node; later changes from the Meshtastic app take precedence.</string>
     <string name="btn_choose">Choose</string>
 
-    <string name="item_connection">Meshtastic app connection</string>
+    <string name="item_connection">%1$s app connection</string>
     <string name="item_connection_detail">Network → 127.0.0.1, port %1$d</string>
+    <string name="item_connection_detail_open">Network → this phone, port %1$d. This daemon always listens on every interface, so other devices on Wi-Fi can reach it too.</string>
 
     <string name="item_lan">Allow LAN access</string>
     <string name="item_lan_on">Other devices on Wi-Fi can connect and reconfigure this node.</string>
@@ -144,7 +145,7 @@
     <string name="item_autostart">Start when radio is plugged in</string>
 
     <string name="item_battery">Report phone battery to the mesh</string>
-    <string name="item_battery_off">The node reports itself as USB powered, like meshtasticd on a Linux box.</string>
+    <string name="item_battery_off">The node reports itself as USB powered, the way a daemon on a Linux box does.</string>
     <string name="item_battery_on">Other nodes see this node\'s charge level. Applies on the next start.</string>
     <string name="item_battery_now">Reporting %1$d%%%2$s</string>
     <string name="battery_charging">, charging</string>
@@ -152,12 +153,13 @@
 
     <string name="item_files">Node files</string>
     <string name="item_files_detail">config.yaml plus the node database, keys and channels (prefs/).</string>
+    <string name="item_files_detail_meshcore">This node\'s whole data directory: identity, contacts, channels and settings. A backup contains the node\'s private key, so anyone who has the file can impersonate it.</string>
     <string name="btn_backup">Back up</string>
     <string name="btn_restore">Restore</string>
     <string name="btn_reset">Reset identity</string>
 
     <string name="item_close">Close Meshdroid</string>
-    <string name="item_close_detail">Stops the node and quits the app. Stop and Restart above only affect the meshtasticd process.</string>
+    <string name="item_close_detail">Stops the node and quits the app. Stop and Restart above only affect the daemon process.</string>
     <string name="btn_close">Close Meshdroid</string>
 
     <string name="dialog_region_title">Set your LoRa region</string>
@@ -166,11 +168,13 @@
 
     <string name="dialog_reset_title">Reset node identity?</string>
     <string name="dialog_reset_text">Deletes the node database, channels and keys. The node gets a new keypair on next start. config.yaml is kept.</string>
+    <string name="dialog_reset_text_meshcore">Deletes this node\'s identity, contacts, channels and settings. It gets a new keypair on next start, and anyone holding it as a contact will see a stranger.</string>
     <string name="btn_reset_confirm">Reset</string>
     <string name="btn_cancel">Cancel</string>
 
     <string name="dialog_restore_title">Restore from a backup?</string>
     <string name="dialog_restore_text">Replaces config.yaml and the whole prefs/ tree, including this node\'s keys and node database, with the contents of the backup. The node is stopped first.</string>
+    <string name="dialog_restore_text_meshcore">Replaces this node\'s whole data directory, including its identity and contacts, with the contents of the backup. The node is stopped first.</string>
     <string name="btn_restore_confirm">Restore</string>
 
     <string name="snack_backup_saved">Backup saved</string>
@@ -184,6 +188,7 @@
 
     <string name="version_line">Meshdroid %1$s (build %2$d)</string>
     <string name="version_daemon">meshtasticd built from firmware %1$s</string>
+    <string name="version_daemon_meshcore">meshcored built from MeshCore %1$s</string>
 
     <!-- Config screen -->
     <string name="config_title">config.yaml</string>
@@ -212,4 +217,14 @@
     <string name="btn_clear">Clear</string>
     <string name="label_filter">Filter</string>
     <string name="label_line_count">%1$d lines</string>
+    <!-- Protocol / profile selection -->
+    <string name="section_protocol">Protocol</string>
+    <string name="section_protocol_summary">Running %1$s</string>
+    <string name="item_protocol">Mesh protocol</string>
+    <string name="item_protocol_detail">Clients connect on port %1$d</string>
+    <string name="dlg_switch_profile_title">Switch to %1$s?</string>
+    <string name="dlg_switch_profile_body">The %1$s node will be stopped and anything connected to it will disconnect. %2$s uses its own identity, contacts and settings; nothing is deleted, and switching back restores them.</string>
+    <string name="btn_switch">Switch</string>
+    <string name="snack_profile_switched">Switched to %1$s. Start the node to run it.</string>
+    <string name="snack_stop_timeout">The node did not stop in time. Try again.</string>
 </resources>
