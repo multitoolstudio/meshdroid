@@ -6,12 +6,30 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
 enum class NodeStatus { STOPPED, STARTING, RUNNING, STOPPING, ERROR }
+
+/**
+ * What a fault line says about the USB link to the radio.
+ *
+ * PIPE: the dongle is still on the bus and still answering, but the host and the
+ * device disagree about what is in flight. libch341 cancels its own transfers on
+ * an error and does nothing about the device, which answers the command it
+ * already accepted; the reply then lands in the next transfer, whose buffer is a
+ * different size. A six byte status reply read into a four byte SPI read is
+ * LIBUSB_TRANSFER_OVERFLOW, which is the usual first symptom. Nothing in the
+ * library corrects the offset afterwards.
+ *
+ * GONE: the dongle has left the bus. The descriptor the daemon holds is dead and
+ * nothing in this process can bring it back.
+ */
+enum class RadioFault { PIPE, GONE }
 
 /**
  * Process-wide state shared between DaemonService and the Compose UI, for
@@ -32,6 +50,15 @@ object DaemonState {
 
     private val _detail = MutableStateFlow("No radio attached.")
     val detail: StateFlow<String> = _detail
+
+    /**
+     * Transport faults, for DaemonService to act on. A SharedFlow rather than a
+     * StateFlow because each one is an event and the count is what matters: a
+     * single failed transfer is noise, and faults that keep arriving are a pipe
+     * that has stopped working.
+     */
+    private val _radioFault = MutableSharedFlow<RadioFault>(extraBufferCapacity = 32)
+    val radioFault: SharedFlow<RadioFault> = _radioFault
 
     /** True while DaemonService exists. MainActivity waits for false before it finishes. */
     private val _serviceAlive = MutableStateFlow(false)
@@ -156,6 +183,11 @@ object DaemonState {
             "Could not receive USB fd" in line ->
                 setStatus(NodeStatus.ERROR, "Could not receive the USB descriptor from the app.")
         }
+        // Transport faults come from libch341 and from the CH341 HAL above it, so
+        // both daemons produce them and neither recovers on its own. Reported to
+        // the service rather than only logged.
+        radioFaultIn(line)?.let { _radioFault.tryEmit(it) }
+
         if (profile == Profile.MESHCORE) { parseMeshCore(line); return }
         // The CH341 lines are handled above, for both profiles, and are not
         // repeated here.
@@ -173,6 +205,26 @@ object DaemonState {
                 setStatus(NodeStatus.ERROR, line.substringAfter(": ").trim() +
                     if ("bind" in line) ". Port ${Settings.API_PORT} is taken by another process." else "")
         }
+    }
+
+    /**
+     * Classifies a line as a USB transport fault, or not one.
+     *
+     * The first three patterns are libch341's own: its transfer callbacks print
+     * the libusb status, and its error path prints the failed transfer. The
+     * USBHal lines are the CH341 RadioLib HAL reporting the return value above
+     * that. LIBUSB_TRANSFER_CANCELLED is acknowledged silently and never
+     * printed, so matching the prefix does not catch an ordinary cancellation.
+     */
+    private fun radioFaultIn(line: String): RadioFault? = when {
+        "LIBUSB_ERROR_NO_DEVICE" in line -> RadioFault.GONE
+        "LIBUSB_TRANSFER_" in line -> RadioFault.PIPE
+        "Could not perform SPI transfer" in line -> RadioFault.PIPE
+        "Could not get input pins" in line -> RadioFault.PIPE
+        "USBHal digitalWrite: cannot write" in line -> RadioFault.PIPE
+        "USBHal digitalRead: cannot read" in line -> RadioFault.PIPE
+        "libch341 in_error detected" in line -> RadioFault.PIPE
+        else -> null
     }
 
     /**
@@ -233,6 +285,26 @@ object Settings {
 
     /** Loopback port meshtasticd listens on while the proxy owns API_PORT. */
     const val DAEMON_PORT = 4404
+
+    // Thresholds for the automatic recovery in DaemonService. A failed transfer on
+    // its own means nothing: libch341 retries, and a short burst around a busy
+    // moment clears by itself. A pipe that has desynchronised never clears, so what
+    // distinguishes the two is faults that keep arriving rather than faults at all.
+
+    /** A quiet gap longer than this ends a burst of transport faults. */
+    const val FAULT_GAP_MS = 10_000L
+
+    /** Faults in one unbroken burst before the link counts as stuck. */
+    const val FAULT_COUNT = 20
+
+    /** How long a burst must persist before it is a stuck pipe and not a hiccup. */
+    const val FAULT_SUSTAIN_MS = 15_000L
+
+    /** Automatic restarts before the user is asked to reconnect the dongle. */
+    const val FAULT_MAX_RECOVERIES = 3
+
+    /** Quiet time after which an earlier incident stops counting against the next. */
+    const val FAULT_FORGET_MS = 30 * 60_000L
     /** Seconds to wait for "init result 0" before telling the user to look at the log. */
     const val START_TIMEOUT_S = 30L
     /** Seconds the daemon gets to exit after SIGTERM before it is killed. */

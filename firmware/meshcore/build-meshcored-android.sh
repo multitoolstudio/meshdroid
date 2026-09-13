@@ -175,12 +175,14 @@ file "$OUT" | grep -q "ARM aarch64" || { echo "!! $OUT is not an aarch64 binary"
 #   MESHDROID_PATCH_0001_R1     patch 0001, the marker it adds to DataStore.cpp
 #   companion: listening on     patch 0001's main.cpp hunks, which are the only
 #                               reason SocketSerialInterface.h is compiled
+#   MESHDROID_PATCH_0003_R1     patch 0003, the CH341 pipe recovery
 #   Meshdroid MeshToad V3       variant/target.h, so the variant was copied
 #
-# The first two are the ones that matter. Both of patch 0001's effects fail
-# silently: a node with no identity directory receives perfectly and cannot
-# sign an advert, and a node with no TCP interface listens on nothing.
-for s in "Using pre-opened CH341 fd" "MESHDROID_PATCH_0001_R1" "companion: listening on" "Meshdroid MeshToad V3"; do
+# The patch markers are the ones that matter. Every one of these patches fails
+# silently: a node with no identity directory receives perfectly and cannot sign
+# an advert, a node with no TCP interface listens on nothing, and a node without
+# the pipe recovery runs for hours and then needs the dongle unplugged.
+for s in "Using pre-opened CH341 fd" "MESHDROID_PATCH_0001_R1" "companion: listening on" "MESHDROID_PATCH_0003_R1" "Meshdroid MeshToad V3"; do
   LC_ALL=C grep -qaF -- "$s" "$OUT" || {
     echo "!! built binary has no \"$s\" string; a patch did not make it into this build."
     exit 1

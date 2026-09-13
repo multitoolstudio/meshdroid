@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.0.1
+
+The USB link to the radio stops working after a few hours and only a physical
+reconnect brings it back. Seen under MeshCore; the cause is in the shared CH341
+library, so meshtasticd is exposed to it too.
+
+What happens: libch341's error path cancels its own transfers and does nothing
+about the device, which still answers the command it already accepted. That reply
+lands in the next transfer, whose buffer is a different size, and the pipe stays
+one reply out of step from then on. A six byte status reply read into a four byte
+SPI read is `LIBUSB_TRANSFER_OVERFLOW`, which is the first symptom. Nothing in
+the library corrects the offset, which is why unplugging the dongle was the only
+fix: a USB reset is what flushes the endpoints.
+
+- **Firmware patch 0003** clears the halt condition on both bulk endpoints and
+  drains whatever the device still has queued, on every failed transfer. The
+  transfer timeout goes from 1 s to 5 s, since a timeout is what starts the
+  desync and a second is marginal on a phone that can deschedule this process for
+  longer than that with a transfer pending.
+- **The pin poll thread survives a failed read.** Upstream ends it on the first
+  one, permanently, which leaves DIO1 edge detection dead for the life of the
+  process: the node runs, listens, and never hears the radio again. It now keeps
+  polling and gives up only after 50 consecutive failures.
+- **The app notices and restarts the node.** `DaemonState` recognises the fault
+  lines from libch341 and from the CH341 HAL above it, and `DaemonService`
+  restarts the daemon when they keep arriving, which closes and reopens the USB
+  device. Bounded at three attempts, after which the node is stopped and the user
+  is told to reconnect the dongle, because a fault that survives a restart will
+  survive the next one.
+- A dongle that leaves the bus entirely (`LIBUSB_ERROR_NO_DEVICE`) is now
+  reported as such and the node stopped, rather than logging into a void.
+
+Still open from 2.0.0: no battery reading under MeshCore, and the sensor log
+noise on each MeshCore boot.
+
 ## 2.0.0
 
 MeshCore, as a second daemon the app can run instead of meshtasticd.
