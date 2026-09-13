@@ -279,6 +279,7 @@ A MeshCore backup zip contains the data directory under a `meshcore/` prefix.
 | No battery reading under MeshCore | Known issue in 2.0.0. MeshCore reports battery as a voltage only, and the app publishes a voltage only when the phone reports one in a range it recognises. Fix due in 2.0.1. |
 | A MeshCore node is silent, and everything else looks right | A MeshCore companion node transmits only when a client asks it to. With no app attached it says nothing, by design, which looks exactly like a broken radio. Attach the MeshCore app and send an advert. |
 | MeshCore hears nothing from the rest of the mesh | Frequency, bandwidth and spreading factor have to match exactly. There is no degraded mode: a mismatch means the radios cannot demodulate each other at all. |
+| The log fills with `LIBUSB_TRANSFER_` errors and the node goes deaf | The USB link to the dongle has desynchronised. Meshdroid restarts the node automatically, up to three times; if it says to reconnect the dongle, unplug it and plug it back in. Fixed in the daemon in 2.0.1, so rebuild if you are running an older binary. |
 
 ## Building from source
 

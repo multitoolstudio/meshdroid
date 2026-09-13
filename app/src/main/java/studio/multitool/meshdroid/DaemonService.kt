@@ -16,6 +16,7 @@ import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import android.os.PowerManager
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -78,6 +79,12 @@ class DaemonService : Service() {
 
     /** True while a stop or restart is tearing the daemon down, so its exit is not an error. */
     @Volatile private var teardown = false
+
+    // Transport fault tracking. See onRadioFault.
+    private var faultCount = 0
+    private var faultFirstAt = 0L
+    private var faultLastAt = 0L
+    private var recoveries = 0
     /** True between a successful launch and the process exiting. */
     @Volatile private var daemonUp = false
 
@@ -99,6 +106,7 @@ class DaemonService : Service() {
         scope.launch {
             combine(DaemonState.status, DaemonState.detail) { s, d -> s to d }.collect { (s, d) -> showNotification(s, d) }
         }
+        scope.launch { DaemonState.radioFault.collect { onRadioFault(it) } }
         control.execute {
             Settings.warm(this)
             // The notification names the profile, and buildNotification can run
@@ -120,6 +128,7 @@ class DaemonService : Service() {
             }
             ACTION_RESTART -> {
                 if (!startInForeground()) return START_NOT_STICKY
+                recoveries = 0        // a start the user asked for, so the budget is fresh
                 control.execute {
                     val dev = device
                     if (dev == null) {
@@ -138,6 +147,7 @@ class DaemonService : Service() {
                 @Suppress("DEPRECATION")
                 val dev: UsbDevice? = intent?.getParcelableExtra(UsbManager.EXTRA_DEVICE)
                 if (dev == null) { stopSelf(); return START_NOT_STICKY }
+                recoveries = 0        // a start the user asked for, so the budget is fresh
                 control.execute {
                     if (daemonUp) return@execute      // already running, nothing to do
                     device = dev
@@ -183,6 +193,7 @@ class DaemonService : Service() {
     /** Runs on the control thread. Opens USB, hands over the fd and launches the binary. */
     private fun startDaemon(dev: UsbDevice) {
         teardown = false
+        faultCount = 0
         // First, before anything appends a line: the log parser needs to know
         // whose patterns it is matching, and the two daemons share none.
         val profile = Profile.current(this)
@@ -338,6 +349,77 @@ class DaemonService : Service() {
                     "so it was built without patch 0002 and is listening on every interface. " +
                     "Rebuild with firmware/build-meshtasticd-android.sh before relying on the LAN switch.")
             }
+        }
+    }
+
+    // ---- recovery ----
+
+    /**
+     * Handles a transport fault reported by DaemonState.
+     *
+     * There is no recovery for this inside the daemon. libch341 cancels its own
+     * transfers when one fails and does nothing about the device, which answers
+     * the command it already accepted; that reply lands in the next transfer,
+     * whose buffer is a different size, and the offset never corrects itself. The
+     * node then logs transfer errors until the endpoints are reset, which from
+     * here means closing the USB device and opening it again.
+     *
+     * So the response is to restart the daemon, and the judgement is when. A
+     * single failed transfer means nothing. What separates a hiccup from a stuck
+     * pipe is that a stuck pipe keeps producing faults, so the trigger is a burst
+     * that is both large and sustained. It is bounded because a fault that
+     * survives a restart will survive the next one, and at that point the dongle
+     * has to be physically reconnected.
+     */
+    private fun onRadioFault(kind: RadioFault) {
+        if (!daemonUp || teardown) return
+        val now = SystemClock.elapsedRealtime()
+
+        if (kind == RadioFault.GONE) {
+            // The descriptor is dead and reopening needs a device that is on the
+            // bus, so there is nothing to restart into. A real detach also fires
+            // ACTION_USB_DEVICE_DETACHED; this covers a dongle that stops
+            // answering without one.
+            DaemonState.appendLog("[meshdroid] the radio has left the USB bus. " +
+                "Unplug the dongle and plug it back in.")
+            DaemonState.setStatus(NodeStatus.ERROR,
+                "The radio disconnected. Unplug it, plug it back in, then start the node.")
+            control.execute { shutdown(null); stopSelf() }
+            return
+        }
+
+        if (now - faultLastAt > Settings.FAULT_FORGET_MS) recoveries = 0
+        if (now - faultLastAt > Settings.FAULT_GAP_MS) { faultCount = 0; faultFirstAt = now }
+        faultLastAt = now
+        faultCount++
+
+        val stuck = faultCount >= Settings.FAULT_COUNT &&
+            now - faultFirstAt >= Settings.FAULT_SUSTAIN_MS
+        if (!stuck) return
+        faultCount = 0
+
+        if (recoveries >= Settings.FAULT_MAX_RECOVERIES) {
+            DaemonState.appendLog("[meshdroid] the radio link is still faulting after " +
+                "$recoveries restarts, so restarting again will not help. " +
+                "Reconnecting the dongle resets the USB endpoints; nothing in the app can.")
+            DaemonState.setStatus(NodeStatus.ERROR,
+                "The radio stopped responding. Unplug it, plug it back in, then start the node.")
+            control.execute { shutdown(null); stopSelf() }
+            return
+        }
+
+        recoveries++
+        DaemonState.appendLog("[meshdroid] the USB link to the radio has stopped responding. " +
+            "Restarting the node to reset it (attempt $recoveries of ${Settings.FAULT_MAX_RECOVERIES}).")
+        control.execute {
+            val dev = device
+            if (dev == null) {
+                DaemonState.setStatus(NodeStatus.ERROR, "The radio stopped responding and is no longer attached.")
+                shutdown(null); stopSelf()
+                return@execute
+            }
+            shutdown("Radio stopped responding. Restarting…")
+            startDaemon(dev)
         }
     }
 
