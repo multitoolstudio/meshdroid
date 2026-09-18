@@ -75,6 +75,8 @@ class BatteryReporter(private val ctx: Context, private val file: File) {
         val mv = when {
             raw in 2500..5000 -> raw
             raw in 3..5 -> raw * 1000
+            // Handle phone reporting microvolts (e.g., 3800000 for 3.8V)
+            raw in 2500000..5000000 -> raw / 1000
             else -> 0
         }
         val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
