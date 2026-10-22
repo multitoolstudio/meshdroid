@@ -23,6 +23,7 @@
     <string name="tab_config">Config</string>
     <string name="tab_mesh">Mesh</string>
     <string name="tab_bbs">BBS</string>
+    <string name="tab_repeater">Repeater</string>
     <string name="tab_logs">Logs</string>
 
     <!-- BBS tab -->
@@ -227,4 +228,17 @@
     <string name="btn_switch">Switch</string>
     <string name="snack_profile_switched">Switched to %1$s. Start the node to run it.</string>
     <string name="snack_stop_timeout">The node did not stop in time. Try again.</string>
+
+    <!-- Repeater tab -->
+    <string name="repeater_connected">Repeater connected</string>
+    <string name="repeater_connecting">Connecting…</string>
+    <string name="repeater_disconnected">Repeater disconnected</string>
+    <string name="repeater_error">Repeater error</string>
+    <string name="btn_refresh">Refresh</string>
+    <string name="btn_sync_clock">Sync clock</string>
+    <string name="btn_advert_flood">Flood advert</string>
+    <string name="btn_advert_zero">Zero-hop advert</string>
+    <string name="btn_reboot">Reboot</string>
+    <string name="btn_commands">Commands</string>
+    <string name="repeater_console_label">CLI command</string>
 </resources>

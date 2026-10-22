@@ -29,8 +29,8 @@ android {
         applicationId = "studio.multitool.meshdroid"
         minSdk = 28
         targetSdk = 35
-        versionCode = 15
-        versionName = "2.0.1"
+        versionCode = 16
+        versionName = "2.1.0"
         ndk { abiFilters += listOf("arm64-v8a") }
 
         // Shown at the bottom of the Node tab, whichever profile is selected.

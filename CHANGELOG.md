@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.1.0
+
+USB Serial CLI management for standalone MeshCore repeaters attached to the phone
+over OTG, so a repeater can be configured in the field without a computer.
+
+- **Repeater tab (MeshCore profile).** Visible when the app's protocol is set to
+  MeshCore. Connects directly to an attached repeater over USB serial at 115200
+  baud (`\r` line framing, UTF-8 encoding for node names with emoji) while
+  ignoring the CH341 SPI node dongle (`0x1A86:0x5512`).
+- **Built-in USB Host serial driver.** Supports USB CDC-ACM (nRF52840, RP2040,
+  ESP32-S3/C3 native USB), Silicon Labs CP210x, WCH CH340/CH341-UART/CH9102, and
+  FTDI bridges with no external dependencies.
+- **One-tap actions and structured settings.** Reads the repeater's board,
+  firmware version, UTC clock, name and radio parameters on connect. Provides
+  quick actions for syncing the repeater's RTC to the phone's time (`time`),
+  sending flood or zero-hop adverts, and rebooting, alongside collapsible
+  sections for Radio (with US/CA preset), Identity & access (name, passwords,
+  read-only access, private key read/write), Forwarding & intervals, and
+  Diagnostics.
+- **Interactive Serial CLI console and command reference.** Live console shown
+  while connected, with a searchable **Commands** popup listing all valid
+  MeshCore repeater CLI commands that can be tapped to insert into the input bar.
+
 ## 2.0.1
 
 The USB link to the radio stops working after a few hours and only a physical

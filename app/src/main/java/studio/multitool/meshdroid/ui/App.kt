@@ -8,6 +8,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -71,6 +72,7 @@ private enum class Tab(
     CONFIG("config", R.string.tab_config, Icons.Filled.Description, { it.hasConfigFile }),
     MESH("mesh", R.string.tab_mesh, Icons.Filled.Forum, { it.supportsMeshLink }),
     BBS("bbs", R.string.tab_bbs, Icons.Filled.Dashboard, { it.supportsBbs }),
+    REPEATER("repeater", R.string.tab_repeater, Icons.Filled.Router, { it.supportsRepeaterCli }),
     LOGS("logs", R.string.tab_logs, Icons.Filled.Terminal),
 }
 
@@ -123,6 +125,7 @@ fun MeshdroidApp(
             // Reached from the BBS tab rather than the bottom bar: it is operator setup, not
             // somewhere to land.
             composable(BBS_SETTINGS_ROUTE) { BbsSettingsScreen(onBack = { nav.popBackStack() }) }
+            composable(Tab.REPEATER.route) { RepeaterScreen() }
             composable(Tab.LOGS.route) { LogsScreen() }
         }
     }

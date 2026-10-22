@@ -110,6 +110,7 @@ What differs:
 | Several apps at once | yes, through the sharing proxy | no, a new connection evicts the old one |
 | LAN access | switchable | always reachable on the LAN |
 | Mesh and BBS tabs | yes | no, both speak Meshtastic's protocol |
+| Repeater tab | no | yes, manages a USB-attached MeshCore repeater |
 
 The tabs that do not apply to the running protocol are hidden rather than shown
 and left to fail.
@@ -216,6 +217,24 @@ is the quickest way to see what a command does.
 The BBS stays off under MeshCore rather than running against a daemon that does
 not speak its protocol. MeshCore support is a later release.
 
+### Repeater
+
+MeshCore only. Configures and manages a standalone hardware MeshCore repeater
+plugged into the phone over USB-C OTG, with no computer needed.
+
+This talks to an external repeater board over USB serial (CDC-ACM, CP210x,
+CH340/CH9102, FTDI at 115200 baud) rather than running the CH341 daemon on the
+phone. While connected it shows the repeater's name, board, firmware version and
+UTC clock, with one-tap buttons for **Sync clock** (`time <epoch>`), **Flood
+advert**, **Zero-hop advert** and **Reboot**, plus expandable sections for
+**Radio** (including the US/CA preset), **Identity & access** (name, admin and
+guest passwords, read-only access, private key backup and restore),
+**Forwarding & intervals**, and **Diagnostics & logs**.
+
+At the bottom of the screen is an interactive **Serial CLI console** and a
+searchable **Commands** reference dialog covering every MeshCore repeater CLI
+command; tapping any entry inserts it into the command bar.
+
 ### Logs
 
 The live daemon log for whichever daemon is running. **Export** writes it to a
@@ -318,7 +337,7 @@ under the Apache 2.0 licence with LLVM exceptions.
 
 ## AI Disclosure
 
-This codebase was developed with AI-assisted tooling. Prior to this project, I had no experience with the Android SDK or the meshtasticd source code. AI was used during development for research, boilerplate, and implementation support.
+This codebase was developed with AI-assisted tooling. Prior to this project, I had no experience with the Android SDK or the meshtasticd source code. AI was used during development for research, boilerplate, and implementation support. AI was also used to help create documentation and code notes.
 
 All architectural decisions, code review, and final implementation are my own. Every commit was audited and verified by me before merge. That said, I am a human.
 

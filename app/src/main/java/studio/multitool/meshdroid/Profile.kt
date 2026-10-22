@@ -57,6 +57,12 @@ enum class Profile(
      * build flags, so there is nothing for the Logs tab's Verbose chip to set.
      */
     val supportsVerbose: Boolean,
+    /**
+     * Whether the Repeater USB CLI tab is shown under this profile. The repeater is
+     * a separate USB-serial device rather than the CH341 daemon, but it speaks
+     * MeshCore's CommonCLI and belongs with the MeshCore profile in the UI.
+     */
+    val supportsRepeaterCli: Boolean,
 ) {
     MESHTASTIC(
         id = "meshtastic",
@@ -69,6 +75,7 @@ enum class Profile(
         supportsBbs = true,
         hasConfigFile = true,
         supportsVerbose = true,
+        supportsRepeaterCli = false,
     ),
 
     MESHCORE(
@@ -82,6 +89,7 @@ enum class Profile(
         supportsBbs = false,
         hasConfigFile = false,
         supportsVerbose = false,
+        supportsRepeaterCli = true,
     );
 
     /**
