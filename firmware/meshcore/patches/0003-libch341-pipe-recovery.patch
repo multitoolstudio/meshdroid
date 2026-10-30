@@ -1,0 +1,109 @@
+--- a/libpinedio-usb.c
++++ b/libpinedio-usb.c
+@@ -24,7 +24,12 @@
+ #define pinedio_mutex_unlock(...) pthread_mutex_unlock(__VA_ARGS__);
+ #endif
+ 
+-#define CH341_USB_TIMEOUT 1000
++/* Meshdroid: a second is comfortable on a desktop and marginal on a phone, where
++ * this process can be descheduled for longer than that with a transfer pending.
++ * A transfer that times out while the device answers it anyway is what
++ * desynchronises the pipe, so the timeout is the first line of defence. Five
++ * seconds costs nothing while things are working. */
++#define CH341_USB_TIMEOUT 5000
+ #define CH341_WRITE_EP 0x02
+ #define CH341_READ_EP 0x82
+ #define	CH341_PACKET_LENGTH	0x20
+@@ -77,6 +82,47 @@
+ // callback for bulk in async transfer
+ static void LIBUSB_CALL cb_in(struct libusb_transfer *transfer) {
+   cb_common(__func__, transfer);
++}
++
++/* Meshdroid: consecutive failed reads before the pin poll thread gives up. At the
++ * 30 Hz poll rate this is a few seconds of a link that is not coming back, which
++ * is long enough for pinedio_resync() to have had several chances. */
++#define PINEDIO_POLL_MAX_FAILS 50
++
++#define PINEDIO_RESYNC_MAX_PACKETS 64
++#define PINEDIO_RESYNC_DRAIN_MS 20
++
++/* Meshdroid: resynchronise the bulk pipes after a failed transfer.
++ *
++ * The error path below cancels our own transfers, which does nothing about the
++ * device: a command it has already accepted is still answered, and that answer
++ * arrives after we have stopped listening for it. The next transfer then reads
++ * the previous one's reply, the sizes disagree, and nothing here corrects the
++ * offset, so the caller sees transfer errors until the dongle is reconnected.
++ *
++ * Clearing the halt condition resets the data toggle on each endpoint, and the
++ * drain reads whatever the device still has queued and throws it away. Both are
++ * synchronous and bounded. Called with usb_access_mutex held and after every
++ * cancellation has completed, so no asynchronous transfer of ours is in flight.
++ *
++ * LIBUSB_ERROR_NO_DEVICE means the dongle has left the bus, where there is
++ * nothing to resynchronise and every further call would just fail slowly. */
++static void pinedio_resync(struct pinedio_inst *inst) {
++  if (inst == NULL || inst->handle == NULL) return;
++
++  if (libusb_clear_halt(inst->handle, CH341_WRITE_EP) == LIBUSB_ERROR_NO_DEVICE) return;
++  if (libusb_clear_halt(inst->handle, CH341_READ_EP) == LIBUSB_ERROR_NO_DEVICE) return;
++
++  uint8_t drain[CH341_PACKET_LENGTH];
++  int dropped = 0;
++  for (int i = 0; i < PINEDIO_RESYNC_MAX_PACKETS; i++) {
++    int len = 0;
++    int ret = libusb_bulk_transfer(inst->handle, CH341_READ_EP, drain, sizeof(drain), &len,
++                                   PINEDIO_RESYNC_DRAIN_MS);
++    if (ret != 0 || len == 0) break;
++    dropped += len;
++  }
++  fprintf(stderr, "pinedio: resynchronised the CH341 pipes, dropped %d stale bytes [MESHDROID_PATCH_0003_R2]\n", dropped);
+ }
+ 
+ static int32_t usb_transfer(struct pinedio_inst *inst, const char *func, unsigned int writecnt, unsigned int readcnt,
+@@ -195,6 +241,11 @@
+       break;
+     libusb_handle_events_timeout(NULL, &(struct timeval){1, 0});
+   }
++  /* Meshdroid: the device may still be holding a reply to a command it has
++   * already accepted. Clear it out here, while nothing of ours is in flight and
++   * the mutex is still held, or every later transfer reads the wrong one. */
++  pinedio_resync(inst);
++
+   if (lock) {
+     pinedio_mutex_unlock(&inst->usb_access_mutex);
+   }
+@@ -644,14 +695,31 @@
+   bool should_exit = false;
+ 
+   uint32_t input;
++  int fail_streak = 0;
+   while (!should_exit) {
+     ret = pinedio_get_input(inst, &input);
+     if (ret < 0) {
+-      should_exit = true;
+       inst->in_error = true;
+       fprintf(stderr, "Failed to get input, res: %d\n", ret);
++      /* Meshdroid: upstream sets should_exit here, so one failed read ends this
++       * thread for the life of the process. DIO1 edge detection never comes back,
++       * and the node keeps running and listening while it can no longer hear the
++       * radio. Keep polling instead: a pipe that pinedio_resync() has cleared
++       * starts answering again, and there is nothing else to notice that.
++       *
++       * The exit request still has to be honoured on this path, or pinedio_deinit()
++       * would block in pthread_join() forever while the thread spins here. */
++      if (inst->pin_poll_thread_exit) should_exit = true;
++      if (++fail_streak >= PINEDIO_POLL_MAX_FAILS) {
++        fprintf(stderr, "pinedio: pin poll thread giving up after %d consecutive failures\n", fail_streak);
++        should_exit = true;
++      }
++      /* Upstream continues without sleeping, which is only safe because it also
++       * exits. Sleep here so a failing read cannot spin the CPU. */
++      platform_sleep(1000 / 30);
+       continue;
+     }
++    fail_streak = 0;
+     if (ret != 0) continue;
+     inst->in_error = false;
+     pinedio_mutex_lock(&inst->usb_access_mutex);

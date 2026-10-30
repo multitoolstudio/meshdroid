@@ -27,17 +27,18 @@
 #   ANDROID_NDK_HOME  required, see docs/BUILDING.md
 #   ANDROID_PREFIX    where build-deps-android.sh installed the static libraries
 #   FW_COMMIT         firmware commit to build, or "keep" to build the checkout
-#                     as it stands. Defaults to the pinned commit below.
+#                     as it stands. Defaults to MESHTASTIC_COMMIT in the manifest.
 set -euo pipefail
 
-# The commit each release is built from. Bump it deliberately, rebuild, test on a
-# phone, and record the new hash in CHANGELOG.md and the release notes. Building
-# whatever master happens to be produces binaries nobody can reproduce later.
-FW_COMMIT_DEFAULT="fdb6730"          # meshtastic/firmware 2.8.1
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+. "$ROOT/apply-patch-exact.sh"
+# daemon-pins.properties is the single source of truth shared with Gradle.
+# It uses shell-compatible KEY=value syntax as well as Java Properties syntax.
+. "$ROOT/daemon-pins.properties"
+FW_COMMIT_DEFAULT="$MESHTASTIC_COMMIT"
 FW_COMMIT="${FW_COMMIT:-$FW_COMMIT_DEFAULT}"
 
 FW="${1:?Path to a meshtastic/firmware checkout}"
-ROOT="$(cd "$(dirname "$0")" && pwd)"
 APP="$ROOT/../app"
 : "${ANDROID_NDK_HOME:?Set ANDROID_NDK_HOME}"
 export ANDROID_PREFIX="${ANDROID_PREFIX:-$ROOT/android-prefix}"
@@ -51,14 +52,34 @@ BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$HOST_TAG/bin"
 if [ "$FW_COMMIT" = "keep" ]; then
   echo ">> building the checkout as it stands: $(git -C "$FW" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 else
-  CURRENT=$(git -C "$FW" rev-parse --short HEAD 2>/dev/null || echo none)
-  if [ "$CURRENT" != "$FW_COMMIT" ]; then
-    echo ">> checking out firmware $FW_COMMIT (was $CURRENT)"
+  if ! TARGET_COMMIT=$(git -C "$FW" rev-parse --verify "$FW_COMMIT^{commit}" 2>/dev/null); then
     git -C "$FW" fetch --tags origin
-    git -C "$FW" checkout -q "$FW_COMMIT"
-    git -C "$FW" submodule update --init --recursive
+    TARGET_COMMIT=$(git -C "$FW" rev-parse --verify "$FW_COMMIT^{commit}")
+  fi
+  CURRENT=$(git -C "$FW" rev-parse HEAD 2>/dev/null || echo none)
+  if [ "$CURRENT" != "$TARGET_COMMIT" ]; then
+    echo ">> checking out firmware $TARGET_COMMIT (was $CURRENT)"
+    git -C "$FW" checkout -q "$TARGET_COMMIT"
+  fi
+  git -C "$FW" submodule update --init --recursive
+  if [ "$FW_COMMIT" = "$MESHTASTIC_COMMIT" ]; then
+    PROTO_ACTUAL=$(git -C "$FW/protobufs" rev-parse HEAD)
+    if [ "$PROTO_ACTUAL" != "$PROTOBUF_COMMIT" ]; then
+      echo "!! firmware protobufs submodule is $PROTO_ACTUAL, expected $PROTOBUF_COMMIT from daemon-pins.properties"
+      exit 1
+    fi
   fi
 fi
+
+# Meshtastic's portduino variant carries the shared PlatformIO dependency pins.
+# Fail before PlatformIO resolves a mismatched toolchain/library revision.
+PORTDUINO_PINS="$FW/variants/native/portduino.ini"
+for dep in "$PLATFORM_NATIVE_COMMIT" "$LIBCH341_COMMIT"; do
+  grep -Fq "archive/$dep.zip" "$PORTDUINO_PINS" || {
+    echo "!! $PORTDUINO_PINS does not pin shared dependency $dep from daemon-pins.properties"
+    exit 1
+  }
+done
 
 # ---- 1. Copy the Android build files into the firmware tree -----------------
 mkdir -p "$FW/variants/native/portduino-android"
@@ -97,7 +118,7 @@ if grep -q PINEDIO_USB_FD_SOCKET "$LIBCH341/libpinedio-usb.c" && \
 fi
 if ! grep -q PINEDIO_FD_PATCH_R2 "$LIBCH341/libpinedio-usb.c"; then
   echo ">> patching $LIBCH341 (0001)"
-  patch -p1 -d "$LIBCH341" < "$ROOT/0001-libch341-android-fd.patch"
+  apply_patch_exact "$LIBCH341" "$ROOT/0001-libch341-android-fd.patch"
 fi
 grep -q PINEDIO_FD_PATCH_R2 "$LIBCH341/libpinedio-usb.c" || {
   echo "!! patch 0001 is not in libpinedio-usb.c. The daemon cannot reach the radio."; exit 1; }
@@ -114,7 +135,7 @@ fi
 if ! grep -q "::fprintf(stderr, \"API server binding" "$WIFI_SHIM/src/WiFiServer.cpp"; then
   echo ">> patching $WIFI_SHIM (0002)"
   ( cd "$WIFI_SHIM" && git checkout -q -- src/WiFiServer.cpp 2>/dev/null || true )
-  patch -p1 -d "$WIFI_SHIM" < "$ROOT/0002-wifiserver-bind-addr.patch"
+  apply_patch_exact "$WIFI_SHIM" "$ROOT/0002-wifiserver-bind-addr.patch"
   rm -rf "$FW/.pio/build/android-arm64/lib"*/libWiFi.a   # make PlatformIO recompile the shim
 fi
 grep -q "::fprintf(stderr, \"API server binding" "$WIFI_SHIM/src/WiFiServer.cpp" || {
@@ -124,22 +145,22 @@ grep -q "::fprintf(stderr, \"API server binding" "$WIFI_SHIM/src/WiFiServer.cpp"
 # 0004 appends to the function 0003 adds, so the order matters.
 if ! grep -q "portduinoApplyInitialRegion" "$FW/src/platform/portduino/PortduinoGlue.cpp"; then
   echo ">> patching firmware for Lora.Region (0003)"
-  patch -p1 -d "$FW" < "$ROOT/0003-yaml-initial-region.patch"
+  apply_patch_exact "$FW" "$ROOT/0003-yaml-initial-region.patch"
 fi
 if ! grep -q "portduinoCheckShutdown" "$FW/src/platform/portduino/PortduinoGlue.cpp"; then
   echo ">> patching firmware for clean shutdown on SIGTERM (0004)"
-  patch -p1 -d "$FW" < "$ROOT/0004-portduino-clean-shutdown.patch"
+  apply_patch_exact "$FW" "$ROOT/0004-portduino-clean-shutdown.patch"
 fi
 if ! grep -q "portduinoFileBatteryInit" "$FW/src/Power.cpp"; then
   echo ">> patching firmware for host battery level (0005)"
-  patch -p1 -d "$FW" < "$ROOT/0005-portduino-battery-file.patch"
+  apply_patch_exact "$FW" "$ROOT/0005-portduino-battery-file.patch"
 fi
 grep -q "portduinoFileBatteryInit" "$FW/src/Power.cpp" || {
   echo "!! patch 0005 did not apply to src/Power.cpp."; exit 1; }
 DEVICE_TELEMETRY="$FW/src/modules/Telemetry/DeviceTelemetry.cpp"
 if ! grep -q "MESHDROID_PHONE_BATTERY" "$DEVICE_TELEMETRY"; then
   echo ">> patching firmware to report the battery level while charging (0006)"
-  patch -p1 -d "$FW" < "$ROOT/0006-portduino-battery-while-charging.patch"
+  apply_patch_exact "$FW" "$ROOT/0006-portduino-battery-while-charging.patch"
 fi
 grep -q "MESHDROID_PHONE_BATTERY" "$DEVICE_TELEMETRY" || {
   echo "!! patch 0006 did not apply to DeviceTelemetry.cpp; the node will report PWR whenever it charges."; exit 1; }

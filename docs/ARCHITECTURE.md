@@ -308,10 +308,11 @@ It also fixes an upstream gap: `identity_store.begin()` is called under
 no private key. Such a node receives perfectly and cannot sign an advert or
 complete an ACK, which reads as a transmit fault rather than a storage one.
 
-The last hunk adds a marker string, `MESHDROID_PATCH_0001_R1`, which the build
-script greps out of the finished binary before installing it. Both of the patch's
-effects fail silently, so a binary that built cleanly without it is the failure
-mode worth guarding against.
+The patch emits `MESHDROID_PATCH_0001_R2` from `DataStore::begin()`. The build
+script checks for that startup log string in the finished binary before
+installing it. Emitting the marker keeps it reachable through link-time section
+garbage collection. Both of the patch's effects fail silently, so a binary that
+built cleanly without it is the failure mode worth guarding against.
 
 ### The companion socket
 

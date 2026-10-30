@@ -22,17 +22,19 @@
 #   ANDROID_NDK_HOME  required
 #   MESHCORE_PREFIX   where build-deps-android.sh installed the static libraries
 #   MC_TAG            MeshCore tag to build, or "keep" to build the checkout as
-#                     it stands. Defaults to the pinned tag below.
+#                     it stands. Defaults to MESHCORE_TAG in the pin manifest.
 set -euo pipefail
 
-# The tag each release is built from. Bump it deliberately, rebuild, test on a
-# phone, and record it in CHANGELOG.md. Building whatever main happens to be
-# produces binaries nobody can reproduce later.
-MC_TAG_DEFAULT="companion-v1.17.1"       # meshcore-dev/MeshCore, commit d9296435
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+. "$ROOT/../apply-patch-exact.sh"
+# daemon-pins.properties is the single source of truth shared with Gradle.
+# It uses shell-compatible KEY=value syntax as well as Java Properties syntax.
+. "$ROOT/../daemon-pins.properties"
+export PLATFORM_NATIVE_COMMIT LIBCH341_COMMIT
+MC_TAG_DEFAULT="$MESHCORE_TAG"
 MC_TAG="${MC_TAG:-$MC_TAG_DEFAULT}"
 
 MC="${1:?Path to a meshcore-dev/MeshCore checkout}"
-ROOT="$(cd "$(dirname "$0")" && pwd)"
 APP="$ROOT/../../app"
 : "${ANDROID_NDK_HOME:?Set ANDROID_NDK_HOME}"
 export MESHCORE_PREFIX="${MESHCORE_PREFIX:-$ROOT/android-prefix}"
@@ -55,7 +57,12 @@ else
   echo ">> checking out $MC_TAG"
   ( cd "$MC" && git checkout -q "$MC_TAG" )
 fi
-echo ">> MeshCore at $( cd "$MC" && git describe --tags --always )"
+ACTUAL_MESHCORE_COMMIT=$(git -C "$MC" rev-parse HEAD)
+if [ "$MC_TAG" = "$MC_TAG_DEFAULT" ] && [ "$ACTUAL_MESHCORE_COMMIT" != "$MESHCORE_COMMIT" ]; then
+  echo "!! $MC_TAG resolved to $ACTUAL_MESHCORE_COMMIT, expected $MESHCORE_COMMIT from daemon-pins.properties"
+  exit 1
+fi
+echo ">> MeshCore at $( cd "$MC" && git describe --tags --always ) ($ACTUAL_MESHCORE_COMMIT)"
 
 # ---- 1. Copy the Android build files into the MeshCore tree ------------------
 # MeshCore's top-level platformio.ini globs variants/*/platformio.ini, so the
@@ -115,12 +122,11 @@ else
     # applied, and the build then shipped an unpatched binary. patch has no
     # notion of an enclosing repository and handles the spaces in PlatformIO's
     # library directory names.
-    if patch -p1 -d "$target" -R --dry-run --force --quiet < "$p" >/dev/null 2>&1; then
+    if patch_reverse_check_succeeds "$target" "$p"; then
       echo ">> $name already applied"
-    # -F0: a patch that lands at a shifted offset produces a binary that
-    # builds, links and does not work, which has already cost a debugging
-    # session here. Refusing is the cheaper outcome.
-    elif patch -p1 -F0 -d "$target" --force --no-backup-if-mismatch < "$p"; then
+    # apply_patch_exact rejects both context fuzz and shifted hunks. Either
+    # can produce a binary that builds, links and does not work.
+    elif apply_patch_exact "$target" "$p"; then
       echo ">> applied $name to $target"
     else
       echo "!! $name failed to apply to $target"
@@ -172,17 +178,17 @@ file "$OUT" | grep -q "ARM aarch64" || { echo "!! $OUT is not an aarch64 binary"
 # "set -o pipefail" whenever the match is found early.
 #
 #   Using pre-opened CH341 fd   patch 0002, the usbfs descriptor hand-off
-#   MESHDROID_PATCH_0001_R1     patch 0001, the marker it adds to DataStore.cpp
+#   MESHDROID_PATCH_0001_R2     patch 0001, emitted by DataStore::begin()
 #   companion: listening on     patch 0001's main.cpp hunks, which are the only
 #                               reason SocketSerialInterface.h is compiled
-#   MESHDROID_PATCH_0003_R1     patch 0003, the CH341 pipe recovery
+#   MESHDROID_PATCH_0003_R2     patch 0003, emitted from the resync log
 #   Meshdroid MeshToad V3       variant/target.h, so the variant was copied
 #
 # The patch markers are the ones that matter. Every one of these patches fails
 # silently: a node with no identity directory receives perfectly and cannot sign
 # an advert, a node with no TCP interface listens on nothing, and a node without
 # the pipe recovery runs for hours and then needs the dongle unplugged.
-for s in "Using pre-opened CH341 fd" "MESHDROID_PATCH_0001_R1" "companion: listening on" "MESHDROID_PATCH_0003_R1" "Meshdroid MeshToad V3"; do
+for s in "Using pre-opened CH341 fd" "MESHDROID_PATCH_0001_R2" "companion: listening on" "MESHDROID_PATCH_0003_R2" "Meshdroid MeshToad V3"; do
   LC_ALL=C grep -qaF -- "$s" "$OUT" || {
     echo "!! built binary has no \"$s\" string; a patch did not make it into this build."
     exit 1

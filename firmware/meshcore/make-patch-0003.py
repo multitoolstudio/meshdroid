@@ -47,7 +47,7 @@ import sys
 from pathlib import Path
 
 PATCH_NAME = "0003-libch341-pipe-recovery.patch"
-MARKER = "MESHDROID_PATCH_0003_R1"
+MARKER = "MESHDROID_PATCH_0003_R2"
 
 TIMEOUT_OLD = "#define CH341_USB_TIMEOUT 1000"
 
@@ -60,11 +60,7 @@ TIMEOUT_NEW = """/* Meshdroid: a second is comfortable on a desktop and marginal
 
 RESYNC_ANCHOR = "static int32_t usb_transfer(struct pinedio_inst *inst, const char *func, unsigned int writecnt, unsigned int readcnt,"
 
-RESYNC_HELPER = """/* Meshdroid: proof that patch 0003 reached the build, greped out of the finished
- * binary by build-meshcored-android.sh. */
-__attribute__((used)) static const char MESHDROID_PATCH_0003[] = "MESHDROID_PATCH_0003_R1";
-
-#define PINEDIO_RESYNC_MAX_PACKETS 64
+RESYNC_HELPER = """#define PINEDIO_RESYNC_MAX_PACKETS 64
 #define PINEDIO_RESYNC_DRAIN_MS 20
 
 /* Meshdroid: resynchronise the bulk pipes after a failed transfer.
@@ -97,7 +93,7 @@ static void pinedio_resync(struct pinedio_inst *inst) {
     if (ret != 0 || len == 0) break;
     dropped += len;
   }
-  fprintf(stderr, "pinedio: resynchronised the CH341 pipes, dropped %d stale bytes\\n", dropped);
+  fprintf(stderr, "pinedio: resynchronised the CH341 pipes, dropped %d stale bytes [MESHDROID_PATCH_0003_R2]\\n", dropped);
 }
 """
 

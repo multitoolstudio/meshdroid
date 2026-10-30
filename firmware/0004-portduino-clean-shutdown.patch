@@ -1,32 +1,31 @@
 diff --git a/src/main.cpp b/src/main.cpp
-index eb0726c..b2c41a9 100644
+index 3f3cb343a..6131d2684 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
-@@ -1393,7 +1393,11 @@ void loop()
- #ifndef PIO_UNIT_TESTING
- void loop()
+@@ -1400,6 +1400,10 @@ void loop()
  {
      runASAP = false;
-+
+ 
 +#if defined(ARCH_PORTDUINO) && !defined(ARCH_PORTDUINO_WASM)
 +    portduinoCheckShutdown(); // SIGTERM from the host: save the node data, then exit
 +#endif
- 
++
      // The single writer of the monotonic wrap carry; every other caller only reads it.
      Time::serviceMonotonic();
+ 
 diff --git a/src/platform/portduino/PortduinoGlue.cpp b/src/platform/portduino/PortduinoGlue.cpp
-index f149607..a71b3d8 100644
+index c243869d9..1ce62724d 100644
 --- a/src/platform/portduino/PortduinoGlue.cpp
 +++ b/src/platform/portduino/PortduinoGlue.cpp
-@@ -15,5 +15,6 @@
+@@ -16,6 +16,7 @@
+ #include "mesh/RadioInterface.h" // validateConfigRegion/Lora
  #include "meshUtils.h"
  #include <strings.h>            // strcasecmp
 +#include <csignal>              // portduinoCheckShutdown
  #include <ErriezCRC32.h>
  #include <Utility.h>
  #include <assert.h>
-@@ -1435,4 +1436,43 @@
-     initRegion();
+@@ -1548,3 +1549,42 @@ void portduinoApplyInitialRegion()
      if (service)
          service->reloadConfig(changes);
  }
@@ -70,10 +69,10 @@ index f149607..a71b3d8 100644
 +    exit(0);
 +}
 diff --git a/src/platform/portduino/PortduinoGlue.h b/src/platform/portduino/PortduinoGlue.h
-index 17d930a..c33b1f1 100644
+index d4c415dbc..ed7afcfff 100644
 --- a/src/platform/portduino/PortduinoGlue.h
 +++ b/src/platform/portduino/PortduinoGlue.h
-@@ -70,4 +70,7 @@
+@@ -110,6 +110,9 @@ void portduinoApplyInitialRegion();
  bool loadConfig(const char *configPath);
  static bool ends_with(std::string_view str, std::string_view suffix);
  void getMacAddr(uint8_t *dmac);
@@ -81,3 +80,5 @@ index 17d930a..c33b1f1 100644
 +void portduinoCheckShutdown();
 +void portduinoInstallShutdownHandler();
  bool MAC_from_string(std::string mac_str, uint8_t *dmac);
+ #ifndef ARCH_PORTDUINO_WASM
+ void readGPIOFromYaml(YAML::Node sourceNode, pinMapping &destPin, int pinDefault = RADIOLIB_NC);

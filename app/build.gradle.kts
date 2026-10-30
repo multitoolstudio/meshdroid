@@ -20,6 +20,9 @@ val keystoreProps = Properties().apply {
     val f = rootProject.file("keystore.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
+val daemonPins = Properties().apply {
+    rootProject.file("firmware/daemon-pins.properties").inputStream().use { load(it) }
+}
 
 android {
     namespace = "studio.multitool.meshdroid"
@@ -29,17 +32,14 @@ android {
         applicationId = "studio.multitool.meshdroid"
         minSdk = 28
         targetSdk = 35
-        versionCode = 16
-        versionName = "2.1.0"
+        versionCode = 17
+        versionName = "2.1.1"
         ndk { abiFilters += listOf("arm64-v8a") }
 
-        // Shown at the bottom of the Node tab, whichever profile is selected.
-        // Each one is the pin in the build script that produces that binary:
-        // FW_COMMIT_DEFAULT in firmware/build-meshtasticd-android.sh, and
-        // MC_TAG_DEFAULT in firmware/meshcore/build-meshcored-android.sh. Keep
-        // each in step when that daemon is rebuilt.
-        buildConfigField("String", "DAEMON_FIRMWARE_COMMIT", "\"fdb6730\"")
-        buildConfigField("String", "MESHCORE_COMMIT", "\"d9296435\"")
+        // Shown at the bottom of the Node tab. The build scripts and app read
+        // the same canonical revisions from firmware/daemon-pins.properties.
+        buildConfigField("String", "DAEMON_FIRMWARE_COMMIT", "\"${daemonPins.getProperty("MESHTASTIC_COMMIT").take(8)}\"")
+        buildConfigField("String", "MESHCORE_COMMIT", "\"${daemonPins.getProperty("MESHCORE_COMMIT").take(8)}\"")
     }
 
     signingConfigs {

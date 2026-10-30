@@ -198,10 +198,10 @@ git clone https://github.com/meshtastic/firmware.git ~/meshtastic-firmware
 ./build-meshtasticd-android.sh ~/meshtastic-firmware
 ```
 
-The script pins the firmware commit. `FW_COMMIT_DEFAULT` at the top of
-`build-meshtasticd-android.sh` names it, and the script checks that commit out
-before building, so two people running the same script get the same daemon.
-Meshdroid 1.0.1 builds against firmware 2.8.1, commit `fdb6730`.
+The script pins the firmware commit from `firmware/daemon-pins.properties`, the
+canonical source used by both daemon scripts and the app's Node footer. It checks
+out that exact commit before building, so the build is reproducible. Meshdroid
+2.1.1 uses firmware `2.8.1.8e6a88d Alpha`.
 
 To try a different commit, or the checkout as it stands:
 
@@ -210,8 +210,9 @@ FW_COMMIT=abc1234 ./build-meshtasticd-android.sh ~/meshtastic-firmware
 FW_COMMIT=keep    ./build-meshtasticd-android.sh ~/meshtastic-firmware
 ```
 
-When a newer firmware is adopted, change `FW_COMMIT_DEFAULT`, rebuild, test on
-a phone and record the hash in `CHANGELOG.md`.
+When adopting another firmware revision, update `MESHTASTIC_COMMIT` in
+`firmware/daemon-pins.properties`, then rebuild and test. Do not edit a built-in
+pin separately in the shell scripts or Gradle.
 
 The script copies the Android env, variant and compat headers into the
 firmware checkout, installs the firmware's PlatformIO packages, applies the
@@ -252,7 +253,7 @@ obvious cause.
 ```bash
 git clone https://github.com/meshcore-dev/MeshCore.git ~/meshcore-firmware
 cd meshdroid/firmware/meshcore
-chmod +x *.sh make-patch-0001.py
+chmod +x *.sh make-patch-0001.py make-patch-0003.py
 ./build-deps-android.sh
 ./build-meshcored-android.sh ~/meshcore-firmware
 ```
@@ -261,31 +262,33 @@ chmod +x *.sh make-patch-0001.py
 the two daemons need different libraries. It also takes around ten minutes and
 only needs running once per NDK version.
 
-`MC_TAG_DEFAULT` at the top of `build-meshcored-android.sh` pins the MeshCore
-tag, currently `companion-v1.17.1` (commit `d9296435`), and the script checks it
-out before building. `MC_TAG=keep` builds the checkout as it stands.
+`MESHCORE_TAG` and `MESHCORE_COMMIT` in `firmware/daemon-pins.properties` pin
+the MeshCore source. The build checks out the tag and verifies its resolved hash
+against the manifest. `MC_TAG=keep` builds the checkout as it stands.
 
 The script copies everything in `variant/` and the PlatformIO env into
 `variants/meshdroid_ch341/` in the MeshCore checkout, installs the packages,
-applies the patches with `patch -F0`, runs `pio run -e android-arm64`, verifies
-the binary, and strips it into
+applies the patches through `firmware/apply-patch-exact.sh`, runs
+`pio run -e android-arm64`, verifies the binary, and strips it into
 `app/src/main/jniLibs/arm64-v8a/libmeshcored.so`.
 
 Two guards will stop a build that seems fine, and both are there on purpose:
 
-- **`-F0` means fuzz is an error.** A patch that lands at a shifted offset
-  produces a binary that builds, links and does not work. If patch 0001 refuses,
-  regenerate it against the current checkout with
-  `./make-patch-0001.py ~/meshcore-firmware` rather than forcing it. The
-  generator anchors on exact strings and refuses rather than corrupting a file.
-- **The binary is searched for four strings**, each of which exists only if a
-  particular patch reached the build:
+- **Patch application is strict.** `firmware/apply-patch-exact.sh` sets `-F0`
+  and rejects offset or fuzz output. A shifted patch can build and link while
+  changing the wrong code. If patch 0001 refuses, regenerate it against the
+  current checkout with `./make-patch-0001.py ~/meshcore-firmware` rather than
+  forcing it. The generator anchors on exact strings and refuses rather than
+  corrupting a file.
+- **The binary is searched for five strings**, each of which proves a patch or
+  variant reached the linked daemon:
 
   | String | Proves |
   |---|---|
   | `Using pre-opened CH341 fd` | patch 0002, the usbfs descriptor hand-off |
-  | `MESHDROID_PATCH_0001_R1` | patch 0001 reached the build |
+  | `MESHDROID_PATCH_0001_R2` | patch 0001 reached the build; its startup log keeps the marker linked |
   | `companion: listening on` | patch 0001's `main.cpp` hunks |
+  | `MESHDROID_PATCH_0003_R2` | patch 0003, included in the CH341 resynchronization log |
   | `Meshdroid MeshToad V3` | the variant was copied |
 
   Both of patch 0001's effects fail silently. A node with no identity directory
@@ -352,8 +355,9 @@ adb shell rm -rf /data/local/tmp/mtd /data/local/tmp/fs /data/local/tmp/libc++_s
 ## Protocol buffers
 
 `app/src/main/proto` holds the Meshtastic `.proto` files, vendored unmodified from
-[meshtastic/protobufs](https://github.com/meshtastic/protobufs) at commit
-`ca2cb1a80fb7ef0e181a67877f71e37885f914cd`. The Gradle protobuf plugin compiles them
+[meshtastic/protobufs](https://github.com/meshtastic/protobufs) at the commit in
+`firmware/daemon-pins.properties`. Meshdroid 2.1.1 uses
+`8f97d66a63ce10cfb12f94203e361691647f5ad3`. The Gradle protobuf plugin compiles them
 into `org.meshtastic.proto.*` during the build; nothing generated is checked in.
 
 The plugin downloads a `protoc` binary from Maven, so the first app build needs network
@@ -368,9 +372,10 @@ javalite runtime does not ship. protoc from Maven does not bundle the well-known
 and the javalite artifact does not carry them as `.proto` files either, so descriptor.proto
 is vendored at the tag matching `protobufVersion`.
 
-Bump the vendored protos and the firmware commit together. The daemon's wire format comes
-from the firmware's own copy of these files, and a mismatched pair shows up as a field
-that silently stops decoding rather than as a build error.
+Bump `PROTOBUF_COMMIT` and `MESHTASTIC_COMMIT` together. The firmware checkout's
+`protobufs` submodule records the matching schema revision. Copy its `.proto`
+files into `app/src/main/proto/meshtastic/`, update the README pin, then build the
+app to catch generated API changes.
 
 ## Build the app
 
@@ -392,28 +397,48 @@ notice at the end of every build is normal for AGP 8.
 
 For a signed release build, see [RELEASING.md](RELEASING.md).
 
-## Updating the firmware
+## Updating the daemons
+
+The two build scripts patch their upstream checkouts and PlatformIO's shared
+package cache. Use clean, disposable worktrees instead of checkouts with local
+changes:
 
 ```bash
-cd ~/meshtastic-firmware && git pull
-cd meshdroid/firmware && ./build-meshtasticd-android.sh ~/meshtastic-firmware
+git -C ~/meshtastic-firmware fetch --tags origin
+git -C ~/meshcore-firmware fetch --tags origin
+git -C ~/meshtastic-firmware worktree add --detach /tmp/md-fw <commit-or-tag>
+git -C ~/meshcore-firmware worktree add --detach /tmp/md-mc <companion-tag>
 ```
 
-Then rebuild the APK. If upstream changes something a patch touches, `patch`
-reports a rejected hunk; the patches are small and readable, and
-[ARCHITECTURE.md](ARCHITECTURE.md) describes what each one must accomplish.
+`firmware/daemon-pins.properties` is the canonical pin manifest. Update
+`MESHTASTIC_COMMIT`, `MESHCORE_TAG`, `MESHCORE_COMMIT`, and, for a Meshtastic
+bump, `PROTOBUF_COMMIT` there. Read `PLATFORM_NATIVE_COMMIT` and `LIBCH341_COMMIT`
+from `variants/native/portduino.ini` at the target Meshtastic revision and update
+the manifest too. The Meshtastic builder verifies its checkout matches those
+shared dependency pins; MeshCore reads them from the manifest for its PlatformIO
+environment. Gradle reads the two daemon commit pins for the Node footer. The
+MeshCore builder also checks the tag resolves to the recorded commit.
 
-For MeshCore, bump `MC_TAG_DEFAULT` in
-`firmware/meshcore/build-meshcored-android.sh`, regenerate patch 0001 against the
-new tag with `make-patch-0001.py`, rebuild and test on a phone. Four pins move
-together and all four belong in `CHANGELOG.md`:
+For Meshtastic, initialize submodules, then run
+`firmware/sync-meshtastic-protos.sh /path/to/meshtastic-firmware`. It verifies
+the manifest pins and syncs the `.proto` files, including the include-only
+`field_metadata.proto`, while updating the README commit line. Keep that schema
+out of `src/main/proto`: compiling its descriptor extensions generates Java that
+javalite cannot use. For MeshCore, regenerate patch 0001 against the new source
+with `firmware/meshcore/make-patch-0001.py`. If `LIBCH341_COMMIT` changes,
+regenerate `firmware/0001-libch341-android-fd.patch` against the pristine library
+and copy it to `firmware/meshcore/patches/0002-libch341-android-fd.patch`. Then
+populate PlatformIO libdeps, apply patch 0002, and regenerate patch 0003 with
+`make-patch-0003.py`. If upstream APIs changed, adapt the variant/generator from
+compiler errors; never force a rejected patch. Bump the relevant marker revision
+when a patch changes.
 
-| Pin | Where |
-|---|---|
-| meshtasticd firmware commit | `FW_COMMIT_DEFAULT` in `firmware/build-meshtasticd-android.sh` |
-| MeshCore tag | `MC_TAG_DEFAULT` in `firmware/meshcore/build-meshcored-android.sh` |
-| both, shown in the app | `DAEMON_FIRMWARE_COMMIT` and `MESHCORE_COMMIT` in `app/build.gradle.kts` |
-| the vendored protobufs | `app/src/main/proto/README.md` |
+Rebuild both daemons with the same NDK, then run `./gradlew assembleDebug`.
+The build scripts verify patch markers in the finished binaries before
+installing them. Update `CHANGELOG.md`, bump the app version, and test both
+profiles on hardware before release. The release checklist is in
+[RELEASING.md](RELEASING.md); patch behavior is described in
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Things that took time to learn
 

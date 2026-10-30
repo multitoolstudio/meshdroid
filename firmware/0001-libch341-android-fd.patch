@@ -1,9 +1,7 @@
-diff --git a/libpinedio-usb.c b/libpinedio-usb.c
-index c964919..9dbfc6a 100644
 --- a/libpinedio-usb.c
 +++ b/libpinedio-usb.c
 @@ -11,6 +11,7 @@
- */
+  */
  
  #include <stdio.h>
 +#include <stdlib.h>
@@ -69,7 +67,7 @@ index c964919..9dbfc6a 100644
  int32_t pinedio_init(struct pinedio_inst *inst, void *driver) {
    int32_t ret;
    inst->int_running_cnt = 0;
-@@ -224,6 +277,28 @@
+@@ -232,6 +285,28 @@
      return -1;
    }
  
@@ -98,7 +96,7 @@ index c964919..9dbfc6a 100644
    ret = libusb_init(NULL);
    if (ret < 0) {
      fprintf(stderr, "Couldn't initialize libusb!\n");
-@@ -231,6 +306,32 @@
+@@ -239,6 +314,32 @@
    }
  
    libusb_set_option(NULL, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_LOG_LEVEL_INFO);
@@ -131,7 +129,7 @@ index c964919..9dbfc6a 100644
    if (inst->options[PINEDIO_OPTION_VID] == 0) {
      inst->options[PINEDIO_OPTION_VID] = 0x1A86;
    }
-@@ -290,6 +391,8 @@
+@@ -298,6 +399,8 @@
      return -2;
    }
  

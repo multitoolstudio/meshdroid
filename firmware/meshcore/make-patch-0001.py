@@ -15,9 +15,9 @@ build cannot compile until a branch is added. Three sites need one:
   examples/companion_radio/main.cpp    declaring the TCP interface
   examples/companion_radio/main.cpp    registering the TCP interface
 
-An eighth edit adds a marker string to DataStore.cpp. It changes no behaviour
-and exists so the build script can prove from the finished binary that this
-patch reached the build.
+The patch also emits a marker from DataStore::begin(). This startup log proves
+from the finished binary that the patch reached the build and keeps the marker
+reachable through link-time section garbage collection.
 
 This edits the checkout, runs git diff to produce the patch, then restores the
 checkout so build-meshcored-android.sh can apply the patch itself the way it
@@ -44,18 +44,30 @@ PATCH_NAME = "0001-portduino-filesystem.patch"
 # here. This string is what the build script greps the finished binary for
 # before it installs anything.
 #
-# __attribute__((used)) keeps it past --gc-sections. Bump the revision whenever
-# the patch changes, so a stale patch is distinguishable from a missing one.
+# DataStore::begin() writes the marker to stderr, so --gc-sections cannot drop
+# it. Bump the revision whenever the patch changes, distinguishing stale patch
+# output from a missing one in the finished daemon.
 MARKER_ANCHOR = """#include <Arduino.h>
 #include "DataStore.h"
 """
 
 MARKER_NEW = """#include <Arduino.h>
 #include "DataStore.h"
+#include <stdio.h>
 
 #if defined(PORTDUINO_PLATFORM)
 // Meshdroid: proof that patch 0001 reached this build. See make-patch-0001.py.
-__attribute__((used)) static const char MESHDROID_PATCH_0001[] = "MESHDROID_PATCH_0001_R1";
+static const char MESHDROID_PATCH_0001[] = "MESHDROID_PATCH_0001_R2";
+#endif
+"""
+
+BEGIN_ANCHOR = """void DataStore::begin() {
+"""
+
+BEGIN_NEW = """void DataStore::begin() {
+#if defined(PORTDUINO_PLATFORM)
+  // The linker keeps this marker because startup emits it to the daemon log.
+  fprintf(stderr, "%s\\n", MESHDROID_PATCH_0001);
 #endif
 """
 
@@ -110,13 +122,7 @@ SETUP_NEW = """#elif defined(PORTDUINO_PLATFORM)
   // Meshdroid: no filesystem bring-up. portduino's main() mounts the VFS root
   // and creates the directory before it calls setup().
   store.begin();
-  the_mesh.begin(
-    #ifdef DISPLAY_CLASS
-        disp != NULL
-    #else
-        false
-    #endif
-  );
+  the_mesh.begin();
 #else
   #error "need to define filesystem"
 #endif
@@ -205,6 +211,7 @@ IFACE_REG_NEW = """// Meshdroid: add the TCP companion interface
 
 EDITS = [
     ("examples/companion_radio/DataStore.cpp", MARKER_ANCHOR, MARKER_NEW, "patch marker"),
+    ("examples/companion_radio/DataStore.cpp", BEGIN_ANCHOR, BEGIN_NEW, "startup patch marker"),
     ("src/helpers/IdentityStore.h", IDSTORE_ANCHOR, IDSTORE_NEW, "FILESYSTEM selection"),
     ("examples/companion_radio/main.cpp", DECL_ANCHOR, DECL_NEW, "DataStore declaration"),
     ("examples/companion_radio/main.cpp", SETUP_ANCHOR, SETUP_NEW, "setup() filesystem"),

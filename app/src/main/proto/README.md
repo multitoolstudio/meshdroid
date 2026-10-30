@@ -1,15 +1,15 @@
 Meshtastic protocol buffer definitions, vendored from
 
     https://github.com/meshtastic/protobufs
-    commit ca2cb1a80fb7ef0e181a67877f71e37885f914cd
+    commit 8f97d66a63ce10cfb12f94203e361691647f5ad3
 
 Copied unmodified. The Gradle protobuf plugin compiles them into
 `org.meshtastic.proto.*` with the javalite runtime at build time.
 
-Pinned deliberately, the same way `firmware/build-meshtasticd-android.sh` pins the
-firmware commit. Bump both together: the wire format the daemon speaks comes from
-the firmware's copy of these files, so a mismatched pair is how a field silently
-stops decoding. `PROTO_COMMIT` in `docs/BUILDING.md` records the pairing.
+Pinned deliberately, in `firmware/daemon-pins.properties` alongside the
+Meshtastic daemon commit. Bump both together: the wire format the daemon speaks
+comes from the firmware's copy of these files, so a mismatched pair can make a
+field silently stop decoding.
 
 Only `.proto` files are vendored. The `.options` files in the upstream repo are
 nanopb sizing hints used by the firmware build and have no effect here.

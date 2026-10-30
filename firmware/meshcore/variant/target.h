@@ -16,6 +16,7 @@
 #include <helpers/radiolib/RadioLibWrappers.h>
 #include <helpers/radiolib/CustomSX1262Wrapper.h>
 #include <helpers/sensors/EnvironmentSensorManager.h>
+#include <helpers/KeyValueStore.h>
 
 #include <ctime>
 
@@ -31,6 +32,10 @@ class MeshdroidBoard : public mesh::MainBoard {
 
 public:
   void begin() { startup_reason = BD_STARTUP_NORMAL; }
+
+  // MeshCore 1.18 calls this for boards that expose dynamic preferences. This
+  // board has no hardware-specific preferences to attach.
+  void attachDynamicPrefs(KeyValueStore* prefs) { }
 
   // The phone's battery, not the dongle's. The app writes one line of
   // key=value pairs to the file named by MESHCORE_BATTERY_FILE, the same file

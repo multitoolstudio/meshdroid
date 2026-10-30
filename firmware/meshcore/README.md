@@ -1,16 +1,19 @@
 # meshcored
 
 The MeshCore companion daemon Meshdroid runs alongside meshtasticd, built from
-meshcore-dev/MeshCore at tag `companion-v1.17.1` (commit `d9296435`).
+meshcore-dev/MeshCore at the tag and commit in `../daemon-pins.properties`.
 
 Read `docs/meshcore-reference.md` for what MeshCore does and what its protocol
 looks like. This file is about building it.
 
 ## State
 
-Shipping in 2.0.0. Confirmed on hardware with a NullHop MeshToad V3 on a
-Pixel 9 Pro: advert transmit, direct messages in both directions, ACKs and path
-discovery, with MeshCore Open attached over TCP on port 5000.
+MeshCore support shipped in 2.0.0. The v1.17.1 daemon was confirmed on a
+NullHop MeshToad V3 and Pixel 9 Pro with advert transmit, direct messages in both
+directions, ACKs and path discovery through MeshCore Open on TCP port 5000.
+Meshdroid 2.1.1 updates the source pin to v1.18.0; the Android binary builds and
+passes its link-time patch checks. Confirm radio behavior on hardware before
+publishing the release.
 
 `DaemonService` launches it as a profile, passes `--fsdir`, and parses its log
 lines. `Profile.kt` holds everything that differs between the two daemons.
@@ -18,7 +21,8 @@ lines. `Profile.kt` holds everything that differs between the two daemons.
 ## Building
 
 ```
-export ANDROID_NDK_HOME=~/Android/Sdk/ndk/30.0.16138531
+# Use the same installed NDK as the meshtasticd build.
+: "${ANDROID_NDK_HOME:?Set ANDROID_NDK_HOME to your installed Android NDK}"
 ./build-deps-android.sh
 ./build-meshcored-android.sh /path/to/meshcore-firmware
 ```
@@ -70,10 +74,10 @@ untouched:
 
 ## Patches
 
-`patches/0001-portduino-filesystem.patch` has eight hunks and is generated, not
-hand-written. Run `./make-patch-0001.py /path/to/meshcore-firmware` after a
-MeshCore version bump rather than fixing rejects by hand; it anchors on exact
-strings and refuses rather than corrupting a file if upstream has moved.
+`patches/0001-portduino-filesystem.patch` is generated, not hand-written. Run
+`./make-patch-0001.py /path/to/meshcore-firmware` after a MeshCore version bump
+rather than fixing rejects by hand; it anchors on exact strings and refuses
+rather than corrupting a file if upstream has moved.
 
 It adds a portduino branch to the filesystem selection in `IdentityStore.h`, the
 `DataStore` declaration and `setup()` bring-up in `main.cpp`,
@@ -107,9 +111,9 @@ failed read. That last one matters as much as the rest: upstream ends the thread
 permanently, which leaves DIO1 edge detection dead for the life of the process,
 so a recovered pipe would go unnoticed.
 
-The build script applies patches with `patch -F0`. Fuzz is an error on purpose:
-a patch that lands at a shifted offset produces a binary that builds, links and
-does not work, and that has already happened once here.
+The shared `firmware/apply-patch-exact.sh` helper applies patches with `-F0`
+and rejects both fuzz and shifted offsets. A patch that lands away from its
+reviewed context can build and link while doing the wrong thing.
 
 ## Verification
 
@@ -121,17 +125,18 @@ the build succeeded and the binary was wrong.
 | String | Proves |
 | ------ | ------ |
 | `Using pre-opened CH341 fd` | patch 0002, the usbfs descriptor hand-off |
-| `MESHDROID_PATCH_0001_R1` | patch 0001 reached the build |
+| `MESHDROID_PATCH_0001_R2` | patch 0001 reached the build and its marker is retained by an observable startup log |
 | `companion: listening on` | patch 0001's `main.cpp` hunks, which are the only reason `SocketSerialInterface.h` is compiled |
-| `MESHDROID_PATCH_0003_R1` | patch 0003, the CH341 pipe recovery |
+| `MESHDROID_PATCH_0003_R2` | patch 0003, emitted by the resynchronization log when pipe recovery runs |
 | `Meshdroid MeshToad V3` | `variant/target.h`, so the variant was copied |
 
-The marker exists because both of patch 0001's effects fail silently. A node
-with no `/identity` directory receives perfectly and cannot sign an advert or
-complete an ACK, which reads as a transmit fault. A node with no TCP interface
-comes up and listens on nothing. Neither looks like a build problem. Bump the
-`_R1` suffix in `make-patch-0001.py` whenever the patch changes, so a stale
-patch is distinguishable from a missing one.
+The markers exist because the filesystem and TCP interface changes fail
+silently. A node with no `/identity` directory receives perfectly and cannot
+sign an advert or complete an ACK, which reads as a transmit fault. A node with
+no TCP interface comes up and listens on nothing. Neither looks like a build
+problem. Bump the `_R2` marker in `make-patch-0001.py` or `make-patch-0003.py`
+when its corresponding patch changes, so stale patch output is distinguishable
+from a missing one.
 
 ## The one setting that matters
 

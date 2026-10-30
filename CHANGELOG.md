@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.1.1
+
+Both packaged daemons are updated, with the Meshtastic protobuf definitions
+pinned to the matching firmware dependency. The upstream firmware, protobuf, and shared native-build dependency pins now
+live in `firmware/daemon-pins.properties`, read by the build scripts and app.
+
+- **meshtasticd:** meshtastic/firmware `2.8.1.8e6a88d Alpha`, commit
+  `8e6a88d06f44cad26f1e8d7cd402939ccacb9b4c`.
+- **meshcored:** meshcore-dev/MeshCore tag `companion-v1.18.0`, commit
+  `81dbae592ffad40b4212bc0b37e82b38da08f4bc`. Updated the Android variant and
+  generated filesystem patch for the 1.18 API changes.
+- **Meshtastic protocol buffers:** meshtastic/protobufs commit
+  `8f97d66a63ce10cfb12f94203e361691647f5ad3`.
+- **Shared build dependencies:** platform-native `86c62edfb7084d11669aa255411a70580e83823b`
+  and libch341 `d85aceb760da291d90e0ff526ba17b2e1323d988`, both recorded in the
+  pin manifest and shared by the daemon builds.
+- MeshCore's filesystem and CH341 recovery patch markers are emitted from the
+  code paths they verify, so link-time section garbage collection cannot discard
+  them before binary verification.
+
 ## 2.1.0
 
 USB Serial CLI management for standalone MeshCore repeaters attached to the phone

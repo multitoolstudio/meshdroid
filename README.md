@@ -319,13 +319,13 @@ Public License, version 3 (see [LICENSE](LICENSE)).
 
 `meshtasticd` in each release is built from
 [meshtastic/firmware](https://github.com/meshtastic/firmware) (GPL-3.0) with
-the patches in `firmware/`, at the commit pinned in
-`firmware/build-meshtasticd-android.sh`.
+the patches in `firmware/`, at the commit recorded in
+`firmware/daemon-pins.properties`.
 
 `meshcored` is built from
 [meshcore-dev/MeshCore](https://github.com/meshcore-dev/MeshCore) (MIT) with
-the patches in `firmware/meshcore/patches/`, at the tag pinned in
-`firmware/meshcore/build-meshcored-android.sh`. Its CH341 HAL
+the patches in `firmware/meshcore/patches/`, at the tag and commit recorded in
+`firmware/daemon-pins.properties`. Its CH341 HAL
 (`firmware/meshcore/variant/USBHal.h`) is vendored from meshtastic/firmware and
 is GPL-3.0.
 

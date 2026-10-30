@@ -80,10 +80,10 @@ Record what changed in `CHANGELOG.md`, including every pin that moved.
 1. Rebuild whichever daemons changed:
    `cd firmware && ./build-meshtasticd-android.sh ~/meshtastic-firmware`, and
    `cd firmware/meshcore && ./build-meshcored-android.sh ~/meshcore-firmware`.
-   Each prints what it built from at the end; both belong in the release notes,
-   and they are the same values pinned in `FW_COMMIT_DEFAULT` and
-   `MC_TAG_DEFAULT`. A release APK must contain both binaries, even though a
-   development build works with either alone.
+   Each prints what it built from at the end. Those revisions must match
+   `firmware/daemon-pins.properties` and belong in the release notes. A release
+   APK must contain both binaries, even though a development build works with
+   either alone.
 2. Bump `versionCode` and `versionName`.
 3. Android Studio: Build > Generate Signed App Bundle / APK > APK >
    release. Or from a terminal, with the wrapper that ships in the repository:
@@ -95,16 +95,18 @@ Record what changed in `CHANGELOG.md`, including every pin that moved.
 
 ## Release checklist
 
-- [ ] Both daemons rebuilt from their pinned upstreams; both recorded in
+- [ ] Both daemons rebuilt from their pinned upstreams; Meshtastic protobufs
+      updated with the matching firmware submodule, all pins recorded in
       `CHANGELOG.md` and the release notes
 - [ ] Both build scripts' binary checks passed. They fail the build when a string
       that only exists if a patch applied is missing from the binary:
       `API server binding` and `Using pre-opened CH341 fd` for meshtasticd,
-      and `Using pre-opened CH341 fd`, `MESHDROID_PATCH_0001_R1`,
-      `companion: listening on` and `Meshdroid MeshToad V3` for meshcored
-- [ ] `versionCode` incremented, `versionName` updated,
-      `DAEMON_FIRMWARE_COMMIT` and `MESHCORE_COMMIT` match the pins in the two
-      build scripts
+      and `Using pre-opened CH341 fd`, `MESHDROID_PATCH_0001_R2`,
+      `MESHDROID_PATCH_0003_R2`, `companion: listening on` and
+      `Meshdroid MeshToad V3` for meshcored
+- [ ] `versionCode` incremented, `versionName` updated, and firmware,
+      protobuf, platform-native and libch341 pins in
+      `firmware/daemon-pins.properties` verified against their source revisions
 - [ ] `CHANGELOG.md` updated
 - [ ] Release APK built, signed with the project key, installed and tested on
       a phone: fresh install and update over the previous version

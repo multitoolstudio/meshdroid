@@ -1,18 +1,20 @@
-Proto files that are imported but never compiled.
+# Protobuf include-only files
 
-The Gradle protobuf plugin compiles everything under `src/main/proto`. These two are on
-protoc's include path instead, through `addIncludeDir` in `app/build.gradle.kts`, so their
-definitions resolve for imports while no Java is generated from them.
+These schemas resolve imports during protoc generation but are not themselves
+compiled into Java. The Gradle protobuf task adds this directory as an include
+path. See `app/build.gradle.kts` for the configuration.
 
-  nanopb.proto                     from meshtastic/protobufs, commit ca2cb1a8
-  google/protobuf/descriptor.proto from protocolbuffers/protobuf, tag v3.25.5
+- `nanopb.proto` comes from `meshtastic/protobufs` at the pinned protobuf
+  revision. It declares options extending the standard descriptor messages.
+- `meshtastic/field_metadata.proto` comes from the same pinned
+  `meshtastic/protobufs` revision. Meshtastic's config schemas use its
+  `field_metadata` option annotations. It imports `google/protobuf/descriptor.proto`.
+- `google/protobuf/descriptor.proto` comes from Protocol Buffers v3.25.5 and
+  defines the standard option messages those extensions reference.
 
-Both have to be here rather than in `src/main/proto`. nanopb.proto declares extensions to
-descriptor.proto's option messages, and generating Java for those extensions would need
-DescriptorProtos, which the javalite runtime does not ship. The Meshtastic protos only
-carry nanopb options as annotations, which protoc has to parse but generates no code for,
-so nothing is lost by leaving them uncompiled.
-
-descriptor.proto is not bundled inside the protoc binary from Maven, and unlike
-protobuf-java, the protobuf-javalite artifact does not carry the well-known types as
-.proto files. Vendoring it is the least surprising fix.
+Keeping these files outside `src/main/proto` is intentional. Generating Java
+for the option extensions emits references to
+`com.google.protobuf.DescriptorProtos`, which the Android `protobuf-javalite`
+runtime does not provide. The annotations are consumed by protoc while
+compiling the other Meshtastic schemas; Meshdroid does not need runtime
+reflection or generated classes for the options.
